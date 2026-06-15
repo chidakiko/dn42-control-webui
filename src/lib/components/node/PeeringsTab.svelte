@@ -40,20 +40,6 @@
 	}
 	onMount(refresh);
 
-	function openCreate() {
-		editing = null;
-		f = {
-			name: '',
-			remote_asn: '',
-			remote_node_id: '',
-			remote_label: '',
-			is_internal: false,
-			enabled: true,
-			notes: ''
-		};
-		showForm = true;
-	}
-
 	function openEdit(p: PeeringOut) {
 		editing = p;
 		f = {
@@ -116,7 +102,6 @@
 	<h3>{t('peer.title')} <span class="faint">({items.length})</span></h3>
 	<div class="inline">
 		<button class="btn sm" onclick={refresh} disabled={loading}>↻</button>
-		<button class="btn primary sm" onclick={openCreate}>+ {t('common.add')}</button>
 	</div>
 </div>
 <p class="faint" style="font-size:0.78rem; margin-top:-0.4rem">{t('peer.note')}</p>

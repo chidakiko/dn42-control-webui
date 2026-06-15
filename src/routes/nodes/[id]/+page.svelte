@@ -13,6 +13,7 @@
 	import JsonEditor from '$lib/components/JsonEditor.svelte';
 	import JsonView from '$lib/components/JsonView.svelte';
 	import PeeringsTab from '$lib/components/node/PeeringsTab.svelte';
+	import PeerWizard from '$lib/components/node/PeerWizard.svelte';
 	import SpecResourceTab from '$lib/components/node/SpecResourceTab.svelte';
 	import GenerationsTab from '$lib/components/node/GenerationsTab.svelte';
 	import StatusEventsTab from '$lib/components/node/StatusEventsTab.svelte';
@@ -28,6 +29,7 @@
 	let error = $state('');
 	let peerings = $state<PeeringOut[]>([]);
 	let health = $state<NodeHealthValue | null>(null);
+	let showWizard = $state(false);
 
 	// "Disconnected" = the control center hasn't heard from the node recently.
 	// stale = warning, down = error. Real-time push is unavailable in both.
@@ -277,6 +279,8 @@
 			<div class="card-head">
 				<h3>{t('node.tab.overview')}</h3>
 				<div class="inline">
+					<button class="btn primary sm" onclick={() => (showWizard = true)}
+						>⚡ {t('peer.prov.btn')}</button>
 					<button
 						class="btn sm"
 						onclick={() => notify('desired_state_updated')}
@@ -409,6 +413,17 @@
 		</button>
 	{/snippet}
 </Modal>
+
+{#if showWizard}
+	<PeerWizard
+		{nodeId}
+		bind:open={showWizard}
+		oncreated={() => {
+			loadPeerings();
+			loadNode();
+		}}
+	/>
+{/if}
 
 <style>
 	.disc {

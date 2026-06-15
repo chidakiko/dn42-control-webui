@@ -233,6 +233,28 @@ export interface RoutingSummary {
 	// { "<as_path_len>": n }
 	as_path_lengths: Record<string, number>;
 	peers: Array<{ protocol: string; count: number }>;
+	prefilter: PrefilterRpki | null;
+}
+
+export interface PrefilterPeer {
+	protocol: string;
+	remote_asn: number | null;
+	received: number;
+	accepted: number;
+	valid: number;
+	invalid: number;
+	not_found: number;
+	unknown: number;
+}
+
+export interface PrefilterRpki {
+	received: number;
+	accepted: number;
+	valid: number;
+	invalid: number;
+	not_found: number;
+	unknown: number;
+	peers: PrefilterPeer[];
 }
 
 export interface RoutingOrigins {

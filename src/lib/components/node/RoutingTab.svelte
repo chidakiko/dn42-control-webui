@@ -122,6 +122,39 @@
 			: []
 	);
 
+	// RPKI 甜甜圈中心：有效率%。
+	let rpkiValidPct = $derived.by(() => {
+		const r = summary?.rpki;
+		if (!r) return '';
+		const tot = r.valid + r.invalid + r.not_found + r.unknown;
+		return tot > 0 ? Math.round((r.valid / tot) * 100) + '%' : '';
+	});
+
+	// 过滤前(import-table)RPKI 分布;旧 agent / 采集失败为 null。
+	let prefilter = $derived(summary?.prefilter ?? null);
+	let prefilterSegments = $derived(
+		prefilter
+			? (['valid', 'invalid', 'not_found', 'unknown'] as const).map((k) => ({
+					label: t(`routing.rpki.${k}`),
+					value: prefilter![k],
+					color: RPKI_COLORS[k]
+				}))
+			: []
+	);
+	let prefilterRejectedPct = $derived.by(() => {
+		if (!prefilter || prefilter.received === 0) return '';
+		const rejected = prefilter.received - prefilter.accepted;
+		return Math.round((rejected / prefilter.received) * 100) + '%';
+	});
+	// per-peer:被拒(invalid+not_found 占主)最多的在前。
+	let prefilterPeers = $derived(
+		prefilter
+			? [...prefilter.peers]
+					.map((p) => ({ ...p, rejected: p.received - p.accepted }))
+					.sort((a, b) => b.rejected - a.rejected || b.received - a.received)
+			: []
+	);
+
 	// prefix-length distribution: one bar per length, stacked v4 + v6.
 	let prefixLenGroups = $derived.by(() => {
 		if (!summary) return [];
@@ -153,6 +186,13 @@
 	});
 
 	let routeCountSeries = $derived(timeline ? timeline.events.map((e) => e.route_count) : []);
+	// 趋势图的简单坐标轴:Y 轴 min/max、X 轴起止时间。
+	let rcMax = $derived(routeCountSeries.length ? Math.max(...routeCountSeries) : 0);
+	let rcMin = $derived(routeCountSeries.length ? Math.min(...routeCountSeries) : 0);
+	let tlStart = $derived(timeline?.events.length ? timeline.events[0].captured_at : null);
+	let tlEnd = $derived(
+		timeline?.events.length ? timeline.events[timeline.events.length - 1].captured_at : null
+	);
 
 	let churnGroups = $derived(
 		timeline
@@ -247,14 +287,55 @@
 			</div>
 		</div>
 		<div class="donut-card">
-			<Donut segments={rpkiSegments} size={140} thickness={20} centerLabel={t('routing.rpki')} />
+			<Donut segments={rpkiSegments} size={140} thickness={20} centerValue={rpkiValidPct} centerLabel={t('routing.rpki.center')} />
 			<div class="legend">
 				{#each rpkiSegments as s (s.label)}
 					<span><span class="kd" style="background:{s.color}"></span>{s.label} <b>{s.value}</b></span>
 				{/each}
 			</div>
 		</div>
+		{#if prefilter}
+			<div class="donut-card">
+				<Donut segments={prefilterSegments} size={140} thickness={20} centerValue={prefilterRejectedPct} centerLabel={t('routing.prefilter.center')} />
+				<div class="legend">
+					<span class="faint">{t('routing.prefilter.recv')} <b>{prefilter.received}</b></span>
+					<span class="faint">{t('routing.prefilter.rej')} <b>{prefilter.received - prefilter.accepted}</b></span>
+				</div>
+			</div>
+		{/if}
 	</div>
+	{#if prefilter}
+		<p class="faint hint">{t('routing.prefilter.note')}</p>
+		{#if prefilterPeers.length}
+			<div class="chart-block">
+				<span class="faint">{t('routing.prefilter.byPeer')}</span>
+				<table class="pf">
+					<thead>
+						<tr>
+							<th>{t('routing.prefilter.col.peer')}</th>
+							<th class="r">{t('routing.prefilter.col.recv')}</th>
+							<th class="r">{t('routing.prefilter.col.acc')}</th>
+							<th class="r">{t('routing.prefilter.col.rej')}</th>
+							<th class="r">{t('routing.rpki.invalid')}</th>
+							<th class="r">{t('routing.rpki.not_found')}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each prefilterPeers as p (p.protocol)}
+							<tr class:bad={p.rejected > 0}>
+								<td class="mono">{p.protocol}{p.remote_asn ? ` · AS${p.remote_asn}` : ''}</td>
+								<td class="r mono">{p.received}</td>
+								<td class="r mono">{p.accepted}</td>
+								<td class="r mono">{p.rejected || ''}</td>
+								<td class="r mono">{p.invalid || ''}</td>
+								<td class="r mono">{p.not_found || ''}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{/if}
 
 	<!-- distributions -->
 	<div class="grid2">
@@ -272,7 +353,19 @@
 	{#if routeCountSeries.length > 1}
 		<div class="chart-block">
 			<span class="faint">{t('routing.timeline')}</span>
-			<Sparkline values={routeCountSeries} width={600} height={48} color="var(--c-accent)" />
+			<div class="axed">
+				<div class="yax">
+					<span>{rcMax}</span>
+					<span>{rcMin}</span>
+				</div>
+				<div class="plot">
+					<Sparkline values={routeCountSeries} width={600} height={110} color="var(--c-accent)" />
+				</div>
+			</div>
+			<div class="xax">
+				<span>{fmtTime(tlStart)}</span>
+				<span>{fmtTime(tlEnd)}</span>
+			</div>
 		</div>
 	{/if}
 	{#if hasChurn}
@@ -492,6 +585,41 @@
 		flex-direction: column;
 		gap: 0.4rem;
 	}
+	/* 趋势图的简单坐标轴:左侧 Y(min/max)+底部 X(起止时间),L 形轴线 */
+	.axed {
+		display: flex;
+		align-items: stretch;
+	}
+	.yax {
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+		text-align: right;
+		padding: 1px 6px 1px 0;
+		min-width: 3rem;
+		font-size: 0.68rem;
+		color: var(--text-faint);
+		font-variant-numeric: tabular-nums;
+	}
+	.plot {
+		flex: 1;
+		min-width: 0;
+		border-left: 1px solid var(--border-strong);
+		border-bottom: 1px solid var(--border-strong);
+	}
+	.plot :global(svg) {
+		display: block;
+		width: 100%;
+		height: 110px;
+	}
+	.xax {
+		display: flex;
+		justify-content: space-between;
+		margin-left: 3rem;
+		font-size: 0.68rem;
+		color: var(--text-faint);
+		font-variant-numeric: tabular-nums;
+	}
 	h4 {
 		margin: 0 0 0.5rem;
 		font-size: 0.9rem;
@@ -499,6 +627,19 @@
 	th.r,
 	td.r {
 		text-align: right;
+	}
+	.hint {
+		font-size: 0.78rem;
+		margin: 0.1rem 0 0.5rem;
+	}
+	.pf {
+		width: 100%;
+		font-size: 0.8rem;
+		font-variant-numeric: tabular-nums;
+	}
+	.pf tr.bad td.r {
+		color: var(--bad);
+		font-weight: 600;
 	}
 	.path {
 		max-width: 220px;

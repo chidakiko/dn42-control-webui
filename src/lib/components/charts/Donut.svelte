@@ -66,6 +66,8 @@
 	{#if centerValue !== ''}
 		<text x={size / 2} y={size / 2} text-anchor="middle" class="cv">{centerValue}</text>
 		<text x={size / 2} y={size / 2 + 18} text-anchor="middle" class="cl">{centerLabel}</text>
+	{:else if centerLabel !== ''}
+		<text x={size / 2} y={size / 2} text-anchor="middle" class="cl cl-center">{centerLabel}</text>
 	{/if}
 </svg>
 
@@ -84,5 +86,11 @@
 		font-size: 0.7rem;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
+	}
+	/* label-only centre (no value): vertically centred, a touch larger */
+	.cl-center {
+		dominant-baseline: middle;
+		font-size: 0.82rem;
+		fill: var(--text-dim);
 	}
 </style>

@@ -54,6 +54,14 @@
 			: []
 	);
 
+	// RPKI 甜甜圈中心：有效率%（让人一眼知道这是 RPKI 且多少前缀有效）。
+	let rpkiValidPct = $derived.by(() => {
+		const r = data?.summary.rpki;
+		if (!r) return '';
+		const tot = r.valid + r.invalid + r.not_found + r.unknown;
+		return tot > 0 ? Math.round((r.valid / tot) * 100) + '%' : '';
+	});
+
 	let maxRoutes = $derived(data ? Math.max(1, ...data.nodes.map((n) => n.route_count)) : 1);
 </script>
 
@@ -85,7 +93,13 @@
 			</div>
 		</div>
 		<div class="donut-wrap">
-			<Donut segments={rpkiSegments} size={150} thickness={22} centerLabel={t('routing.rpki')} />
+			<Donut
+				segments={rpkiSegments}
+				size={150}
+				thickness={22}
+				centerValue={rpkiValidPct}
+				centerLabel={t('routing.rpki.center')}
+			/>
 			<div class="legend">
 				{#each rpkiSegments as s (s.label)}
 					<span><span class="sw" style="background:{s.color}"></span>{s.label} <b>{s.value}</b></span>
