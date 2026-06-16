@@ -1,7 +1,7 @@
 // Documentation screenshots for docs/web-ui.md.
 //
 // Captures the admin UI (zh locale) into docs/images/. Requires a local stack:
-//   - control-server seeded on :8000 (admin token "dev-admin-token", seed node hkg1-edge)
+//   - control-server seeded on :8000 (admin token "dev-admin-token", seed node edge1)
 //   - vite dev on :5173
 // Run from apps/web:  node scripts/doc-shots.mjs
 //
@@ -13,7 +13,7 @@ import { mkdirSync } from 'node:fs';
 const BASE = 'http://127.0.0.1:5174';
 const API = 'http://127.0.0.1:8001';
 const TOKEN = 'dev-admin-token';
-const NODE = 'hkg1-edge';
+const NODE = 'edge1';
 const OUT = '../../docs/images';
 mkdirSync(OUT, { recursive: true });
 
@@ -113,7 +113,7 @@ try {
 
 	// step 2 — WireGuard（接口名已按 peer 名自动带入）
 	await fill('本端地址', 'fe80::1/64');
-	await fill('对端公钥', 'GtakWLKgOsfDBl7NbBwRrEoKSHUvl8jzWtXHawklvhE=');
+	await fill('对端公钥', '+aFW7xRRTwOZ6w0EmrvqN4ng2QcFA0/9Wdu9GkdwJgQ=');
 	await shotModal('wui-wizard-2');
 	await next();
 

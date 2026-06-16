@@ -246,6 +246,14 @@ export interface PrefilterPeer {
 	not_found: number;
 }
 
+export interface PrefilterRoute {
+	prefix: string;
+	origin_asn: number | null;
+	protocol: string;
+	// 仅 filtered_routes：out_of_range | self_net | as_path_too_long | blocked_asn | policy
+	reason?: string | null;
+}
+
 export interface PrefilterRpki {
 	received: number;
 	accepted: number;
@@ -253,6 +261,8 @@ export interface PrefilterRpki {
 	invalid: number;
 	not_found: number;
 	peers: PrefilterPeer[];
+	invalid_routes: PrefilterRoute[];
+	filtered_routes: PrefilterRoute[];
 }
 
 export interface RoutingOrigins {

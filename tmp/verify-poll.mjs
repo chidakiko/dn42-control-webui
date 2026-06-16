@@ -10,7 +10,7 @@ await ctx.addInitScript(() => {
 	localStorage.setItem('dn42.locale', 'zh');
 });
 const page = await ctx.newPage();
-await page.goto(BASE + '/nodes/hkg1-edge', { waitUntil: 'load' });
+await page.goto(BASE + '/nodes/edge1', { waitUntil: 'load' });
 await page.waitForSelector('.tabs', { timeout: 15000 });
 await page.waitForTimeout(1000);
 

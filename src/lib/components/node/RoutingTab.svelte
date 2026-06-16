@@ -132,23 +132,27 @@
 	// ROA 表整张没采到 ⇒ RPKI 校验不可用,显式提示(不再悄悄塞「未知」)。
 	let rpkiUnavailable = $derived(summary != null && summary.rpki_observed === false);
 
-	// 过滤前(import-table)RPKI 分布;旧 agent / 采集失败为 null。
+	// 过滤前(import-table);旧 agent / 采集失败为 null。
 	let prefilter = $derived(summary?.prefilter ?? null);
-	let prefilterSegments = $derived(
-		prefilter
-			? (['valid', 'invalid', 'not_found'] as const).map((k) => ({
-					label: t(`routing.rpki.${k}`),
-					value: prefilter![k],
-					color: RPKI_COLORS[k]
-				}))
-			: []
-	);
+	// 过滤结果完整分解(4 段,和≈收到):接受·有效 / 接受·未覆盖 / 拒绝·无效 / 拒绝·其他。
+	let prefilterOutcome = $derived.by(() => {
+		if (!prefilter) return [];
+		const { received, accepted, invalid, not_found } = prefilter;
+		const acceptNotFound = Math.min(not_found, accepted);
+		const acceptValid = Math.max(0, accepted - acceptNotFound);
+		const rejectOther = Math.max(0, received - accepted - invalid);
+		return [
+			{ label: t('routing.prefilter.acceptValid'), value: acceptValid, color: 'var(--c-ok)' },
+			{ label: t('routing.prefilter.acceptNotFound'), value: acceptNotFound, color: 'var(--c-warn)' },
+			{ label: t('routing.prefilter.rejectInvalid'), value: invalid, color: 'var(--c-bad)' },
+			{ label: t('routing.prefilter.rejectOther'), value: rejectOther, color: 'var(--c-unknown)' }
+		];
+	});
 	let prefilterRejectedPct = $derived.by(() => {
 		if (!prefilter || prefilter.received === 0) return '';
-		const rejected = prefilter.received - prefilter.accepted;
-		return Math.round((rejected / prefilter.received) * 100) + '%';
+		return Math.round(((prefilter.received - prefilter.accepted) / prefilter.received) * 100) + '%';
 	});
-	// per-peer:被拒(invalid+not_found 占主)最多的在前。
+	// per-peer:被拒(invalid+not_found 占主)最多的在前。默认折叠显示 4 条。
 	let prefilterPeers = $derived(
 		prefilter
 			? [...prefilter.peers]
@@ -156,6 +160,49 @@
 					.sort((a, b) => b.rejected - a.rejected || b.received - a.received)
 			: []
 	);
+	let peersExpanded = $state(false);
+	let shownPeers = $derived(peersExpanded ? prefilterPeers : prefilterPeers.slice(0, 4));
+	let invalidRoutes = $derived(prefilter?.invalid_routes ?? []);
+	let filteredRoutes = $derived(prefilter?.filtered_routes ?? []);
+	// 被拒原因枚举 → 本地化文案；未知值回退原串。
+	function reasonLabel(reason: string | null | undefined): string {
+		if (!reason) return '—';
+		const key = `routing.prefilter.reason.${reason}`;
+		const label = t(key);
+		return label === key ? reason : label;
+	}
+	// 被拒明细：按原因筛选 + 分页（默认 15 条/页）。
+	const FILTERED_PAGE = 15;
+	const REASON_ORDER = ['out_of_range', 'self_net', 'as_path_too_long', 'blocked_asn', 'policy'];
+	let filterReason = $state('');
+	let filteredPage = $state(0);
+	let reasonCounts = $derived.by(() => {
+		const m: Record<string, number> = {};
+		for (const r of filteredRoutes) {
+			const k = r.reason ?? 'policy';
+			m[k] = (m[k] ?? 0) + 1;
+		}
+		return m;
+	});
+	let reasonOptions = $derived(REASON_ORDER.filter((k) => (reasonCounts[k] ?? 0) > 0));
+	let filteredView = $derived(
+		filterReason
+			? filteredRoutes.filter((r) => (r.reason ?? 'policy') === filterReason)
+			: filteredRoutes
+	);
+	let filteredPages = $derived(Math.max(1, Math.ceil(filteredView.length / FILTERED_PAGE)));
+	let filteredSafePage = $derived(Math.min(filteredPage, filteredPages - 1));
+	let filteredPageRows = $derived(
+		filteredView.slice(filteredSafePage * FILTERED_PAGE, filteredSafePage * FILTERED_PAGE + FILTERED_PAGE)
+	);
+
+	// 起源 AS Top 榜 / 按 peer 统计路由：默认 top 6,其余折叠。
+	let originsExpanded = $state(false);
+	let allOrigins = $derived(origins?.origins ?? []);
+	let shownOrigins = $derived(originsExpanded ? allOrigins : allOrigins.slice(0, 6));
+	let routePeersExpanded = $state(false);
+	let allRoutePeers = $derived(summary?.peers ?? []);
+	let shownRoutePeers = $derived(routePeersExpanded ? allRoutePeers : allRoutePeers.slice(0, 6));
 
 	// prefix-length distribution: one bar per length, stacked v4 + v6.
 	let prefixLenGroups = $derived.by(() => {
@@ -302,46 +349,15 @@
 		</div>
 		{#if prefilter}
 			<div class="donut-card">
-				<Donut segments={prefilterSegments} size={140} thickness={20} centerValue={prefilterRejectedPct} centerLabel={t('routing.prefilter.center')} />
+				<Donut segments={prefilterOutcome} size={140} thickness={20} centerValue={prefilterRejectedPct} centerLabel={t('routing.prefilter.center')} />
 				<div class="legend">
-					<span class="faint">{t('routing.prefilter.recv')} <b>{prefilter.received}</b></span>
-					<span class="faint">{t('routing.prefilter.rej')} <b>{prefilter.received - prefilter.accepted}</b></span>
+					{#each prefilterOutcome as s (s.label)}
+						<span><span class="kd" style="background:{s.color}"></span>{s.label} <b>{s.value}</b></span>
+					{/each}
 				</div>
 			</div>
 		{/if}
 	</div>
-	{#if prefilter}
-		<p class="faint hint">{t('routing.prefilter.note')}</p>
-		{#if prefilterPeers.length}
-			<div class="chart-block">
-				<span class="faint">{t('routing.prefilter.byPeer')}</span>
-				<table class="pf">
-					<thead>
-						<tr>
-							<th>{t('routing.prefilter.col.peer')}</th>
-							<th class="r">{t('routing.prefilter.col.recv')}</th>
-							<th class="r">{t('routing.prefilter.col.acc')}</th>
-							<th class="r">{t('routing.prefilter.col.rej')}</th>
-							<th class="r">{t('routing.rpki.invalid')}</th>
-							<th class="r">{t('routing.rpki.not_found')}</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each prefilterPeers as p (p.protocol)}
-							<tr class:bad={p.rejected > 0}>
-								<td class="mono">{p.protocol}{p.remote_asn ? ` · AS${p.remote_asn}` : ''}</td>
-								<td class="r mono">{p.received}</td>
-								<td class="r mono">{p.accepted}</td>
-								<td class="r mono">{p.rejected || ''}</td>
-								<td class="r mono">{p.invalid || ''}</td>
-								<td class="r mono">{p.not_found || ''}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		{/if}
-	{/if}
 
 	<!-- distributions -->
 	<div class="grid2">
@@ -385,6 +401,129 @@
 		</div>
 	{/if}
 
+	<!-- 过滤前(import-table)：各对端 + 无效路由 -->
+	{#if prefilter}
+		<p class="faint hint">{t('routing.prefilter.note')}</p>
+		{#if prefilterPeers.length}
+			<div class="chart-block">
+				<span class="faint">{t('routing.prefilter.byPeer')}</span>
+				<table class="pf">
+					<thead>
+						<tr>
+							<th>{t('routing.prefilter.col.peer')}</th>
+							<th class="r">{t('routing.prefilter.col.recv')}</th>
+							<th class="r">{t('routing.prefilter.col.acc')}</th>
+							<th class="r">{t('routing.prefilter.col.rej')}</th>
+							<th class="r">{t('routing.rpki.invalid')}</th>
+							<th class="r">{t('routing.rpki.not_found')}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each shownPeers as p (p.protocol)}
+							<tr class:bad={p.rejected > 0}>
+								<td class="mono">{p.protocol}{p.remote_asn ? ` · AS${p.remote_asn}` : ''}</td>
+								<td class="r mono">{p.received}</td>
+								<td class="r mono">{p.accepted}</td>
+								<td class="r mono">{p.rejected || ''}</td>
+								<td class="r mono">{p.invalid || ''}</td>
+								<td class="r mono">{p.not_found || ''}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+				{#if prefilterPeers.length > 4}
+					<button class="btn ghost sm" onclick={() => (peersExpanded = !peersExpanded)}>
+						{peersExpanded
+							? t('routing.prefilter.collapse')
+							: t('routing.prefilter.expand', prefilterPeers.length - 4)}
+					</button>
+				{/if}
+			</div>
+		{/if}
+		{#if invalidRoutes.length}
+			<div class="chart-block">
+				<span class="faint">{t('routing.prefilter.invalidTitle')} <b>({invalidRoutes.length})</b></span>
+				<table class="pf">
+					<thead>
+						<tr>
+							<th>{t('routing.col.prefix')}</th>
+							<th>{t('routing.prefilter.col.originAsn')}</th>
+							<th>{t('routing.prefilter.col.peer')}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each invalidRoutes as r, i (`${r.prefix}-${r.protocol}-${i}`)}
+							<tr class="bad">
+								<td class="mono">{r.prefix}</td>
+								<td class="mono">{r.origin_asn ? `AS${r.origin_asn}` : '—'}</td>
+								<td class="mono faint">{r.protocol}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+		{#if filteredRoutes.length}
+			<div class="chart-block">
+				<div class="card-head">
+					<span class="faint"
+						>{t('routing.prefilter.filteredTitle')}
+						<b>({filteredRoutes.length}{filteredRoutes.length >= 5000 ? '+' : ''})</b></span
+					>
+					<select bind:value={filterReason} onchange={() => (filteredPage = 0)} style="width:auto">
+						<option value=""
+							>{t('routing.prefilter.reason.col')}: {t('common.total')} ({filteredRoutes.length})</option
+						>
+						{#each reasonOptions as k (k)}
+							<option value={k}>{reasonLabel(k)} ({reasonCounts[k]})</option>
+						{/each}
+					</select>
+				</div>
+				<table class="pf">
+					<thead>
+						<tr>
+							<th>{t('routing.col.prefix')}</th>
+							<th>{t('routing.prefilter.col.originAsn')}</th>
+							<th>{t('routing.prefilter.reason.col')}</th>
+							<th>{t('routing.prefilter.col.peer')}</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each filteredPageRows as r (`${r.prefix}-${r.protocol}`)}
+							<tr>
+								<td class="mono">{r.prefix}</td>
+								<td class="mono">{r.origin_asn ? `AS${r.origin_asn}` : '—'}</td>
+								<td
+									><span
+										class="reason"
+										class:bad={r.reason === 'out_of_range' || r.reason === 'blocked_asn'}
+										class:muted={r.reason === 'policy'}>{reasonLabel(r.reason)}</span
+									></td
+								>
+								<td class="mono faint">{r.protocol}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+				{#if filteredPages > 1}
+					<div class="pager">
+						<button
+							class="btn ghost sm"
+							disabled={filteredSafePage === 0}
+							onclick={() => (filteredPage = filteredSafePage - 1)}>‹</button
+						>
+						<span class="faint">{filteredSafePage + 1} / {filteredPages} · {filteredView.length}</span>
+						<button
+							class="btn ghost sm"
+							disabled={filteredSafePage >= filteredPages - 1}
+							onclick={() => (filteredPage = filteredSafePage + 1)}>›</button
+						>
+					</div>
+				{/if}
+			</div>
+		{/if}
+	{/if}
+
 	<!-- origins + peers -->
 	<div class="grid2">
 		<div>
@@ -392,22 +531,32 @@
 			<table>
 				<thead><tr><th>{t('routing.col.asn')}</th><th class="r">{t('routing.col.count')}</th></tr></thead>
 				<tbody>
-					{#each origins?.origins ?? [] as o (o.asn)}
+					{#each shownOrigins as o (o.asn)}
 						<tr><td class="mono">AS{o.asn}</td><td class="r mono">{o.count}</td></tr>
 					{/each}
 				</tbody>
 			</table>
+			{#if allOrigins.length > 6}
+				<button class="btn ghost sm" onclick={() => (originsExpanded = !originsExpanded)}>
+					{originsExpanded ? t('routing.collapse') : t('routing.showMore', allOrigins.length - 6)}
+				</button>
+			{/if}
 		</div>
 		<div>
 			<h4>{t('routing.peers')}</h4>
 			<table>
 				<thead><tr><th>{t('routing.col.peer')}</th><th class="r">{t('routing.col.count')}</th></tr></thead>
 				<tbody>
-					{#each (summary.peers ?? []).slice(0, 15) as p (p.protocol)}
+					{#each shownRoutePeers as p (p.protocol)}
 						<tr><td class="mono">{p.protocol}</td><td class="r mono">{p.count}</td></tr>
 					{/each}
 				</tbody>
 			</table>
+			{#if allRoutePeers.length > 6}
+				<button class="btn ghost sm" onclick={() => (routePeersExpanded = !routePeersExpanded)}>
+					{routePeersExpanded ? t('routing.collapse') : t('routing.showMore', allRoutePeers.length - 6)}
+				</button>
+			{/if}
 		</div>
 	</div>
 
@@ -681,6 +830,31 @@
 	}
 	.rpki.muted {
 		color: var(--text-faint);
+	}
+	.reason {
+		font-size: 0.7rem;
+		padding: 0.08rem 0.4rem;
+		border-radius: 3px;
+		white-space: nowrap;
+		background: var(--warn-bg);
+		color: var(--warn);
+	}
+	.reason.bad {
+		background: var(--bad-bg);
+		color: var(--bad);
+	}
+	.reason.muted {
+		background: transparent;
+		color: var(--text-faint);
+	}
+	.pager {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.6rem;
+		margin-top: 0.4rem;
+		font-size: 0.78rem;
+		font-variant-numeric: tabular-nums;
 	}
 	.local-tag {
 		font-size: 0.66rem;
