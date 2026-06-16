@@ -359,6 +359,8 @@ const en: Dict = {
 	'routing.family': 'Address family',
 	'routing.rpki': 'RPKI status',
 	'routing.rpki.center': 'RPKI valid',
+	'routing.rpki.unavailable':
+		'ROA table not collected — RPKI validation unavailable this cycle (check the rpki-cache / stayrtr service).',
 	'routing.rpki.valid': 'valid',
 	'routing.rpki.invalid': 'invalid',
 	'routing.rpki.unknown': 'unknown',
@@ -837,6 +839,7 @@ const zh: Dict = {
 	'routing.family': '地址族',
 	'routing.rpki': 'RPKI 状态',
 	'routing.rpki.center': 'RPKI 有效',
+	'routing.rpki.unavailable': 'ROA 表未采集到——本轮 RPKI 校验不可用（检查 rpki-cache / stayrtr 服务）。',
 	'routing.rpki.valid': '有效',
 	'routing.rpki.invalid': '无效',
 	'routing.rpki.unknown': '未知',

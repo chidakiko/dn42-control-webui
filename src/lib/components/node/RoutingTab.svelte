@@ -35,8 +35,7 @@
 	const RPKI_COLORS: Record<string, string> = {
 		valid: 'var(--c-ok)',
 		invalid: 'var(--c-bad)',
-		not_found: 'var(--c-warn)',
-		unknown: 'var(--c-unknown)'
+		not_found: 'var(--c-warn)'
 	};
 	const V4_COLOR = 'var(--c-accent)';
 	const V6_COLOR = 'var(--c-ok)';
@@ -114,7 +113,7 @@
 
 	let rpkiSegments = $derived(
 		summary
-			? (['valid', 'invalid', 'not_found', 'unknown'] as const).map((k) => ({
+			? (['valid', 'invalid', 'not_found'] as const).map((k) => ({
 					label: t(`routing.rpki.${k}`),
 					value: summary!.rpki[k],
 					color: RPKI_COLORS[k]
@@ -126,15 +125,18 @@
 	let rpkiValidPct = $derived.by(() => {
 		const r = summary?.rpki;
 		if (!r) return '';
-		const tot = r.valid + r.invalid + r.not_found + r.unknown;
+		const tot = r.valid + r.invalid + r.not_found;
 		return tot > 0 ? Math.round((r.valid / tot) * 100) + '%' : '';
 	});
+
+	// ROA 表整张没采到 ⇒ RPKI 校验不可用,显式提示(不再悄悄塞「未知」)。
+	let rpkiUnavailable = $derived(summary != null && summary.rpki_observed === false);
 
 	// 过滤前(import-table)RPKI 分布;旧 agent / 采集失败为 null。
 	let prefilter = $derived(summary?.prefilter ?? null);
 	let prefilterSegments = $derived(
 		prefilter
-			? (['valid', 'invalid', 'not_found', 'unknown'] as const).map((k) => ({
+			? (['valid', 'invalid', 'not_found'] as const).map((k) => ({
 					label: t(`routing.rpki.${k}`),
 					value: prefilter![k],
 					color: RPKI_COLORS[k]
@@ -275,6 +277,10 @@
 			<span class="lbl">{t('routing.captured')}</span>
 		</div>
 	</div>
+
+	{#if rpkiUnavailable}
+		<p class="roa-warn">⚠ {t('routing.rpki.unavailable')}</p>
+	{/if}
 
 	<!-- donuts: family + rpki -->
 	<div class="donuts">
@@ -631,6 +637,15 @@
 	.hint {
 		font-size: 0.78rem;
 		margin: 0.1rem 0 0.5rem;
+	}
+	.roa-warn {
+		margin: 0 0 0.8rem;
+		padding: 0.5rem 0.8rem;
+		border-radius: var(--radius-sm);
+		font-size: 0.85rem;
+		background: var(--warn-bg);
+		color: var(--warn);
+		border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
 	}
 	.pf {
 		width: 100%;

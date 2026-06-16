@@ -48,8 +48,7 @@
 			? [
 					{ label: t('routing.rpki.valid'), value: data.summary.rpki.valid, color: 'var(--c-ok)' },
 					{ label: t('routing.rpki.invalid'), value: data.summary.rpki.invalid, color: 'var(--c-bad)' },
-					{ label: t('routing.rpki.not_found'), value: data.summary.rpki.not_found, color: 'var(--c-warn)' },
-					{ label: t('routing.rpki.unknown'), value: data.summary.rpki.unknown, color: 'var(--c-unknown)' }
+					{ label: t('routing.rpki.not_found'), value: data.summary.rpki.not_found, color: 'var(--c-warn)' }
 				]
 			: []
 	);
@@ -58,7 +57,7 @@
 	let rpkiValidPct = $derived.by(() => {
 		const r = data?.summary.rpki;
 		if (!r) return '';
-		const tot = r.valid + r.invalid + r.not_found + r.unknown;
+		const tot = r.valid + r.invalid + r.not_found;
 		return tot > 0 ? Math.round((r.valid / tot) * 100) + '%' : '';
 	});
 

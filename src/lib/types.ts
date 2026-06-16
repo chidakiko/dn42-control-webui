@@ -201,7 +201,6 @@ export interface AuditEntry {
 export interface RpkiCounts {
 	valid: number;
 	invalid: number;
-	unknown: number;
 	not_found: number;
 }
 
@@ -228,6 +227,7 @@ export interface RoutingSummary {
 	route_count_v6: number;
 	local_count: number;
 	rpki: RpkiCounts;
+	rpki_observed: boolean;
 	// { "4": { "24": n, ... }, "6": { "48": n, ... } }
 	prefix_lengths: Record<string, Record<string, number>>;
 	// { "<as_path_len>": n }
@@ -244,7 +244,6 @@ export interface PrefilterPeer {
 	valid: number;
 	invalid: number;
 	not_found: number;
-	unknown: number;
 }
 
 export interface PrefilterRpki {
@@ -253,7 +252,6 @@ export interface PrefilterRpki {
 	valid: number;
 	invalid: number;
 	not_found: number;
-	unknown: number;
 	peers: PrefilterPeer[];
 }
 
