@@ -157,9 +157,30 @@ export interface DnsGroupOut {
 export interface DnsGroupZoneOut {
 	id: number;
 	dns_group_id: number;
-	name: string;
+	zone: string;
+	primary_ns: string | null;
+	admin_email: string | null;
+	soa_refresh: number | null;
+	soa_retry: number | null;
+	soa_expire: number | null;
+	soa_minimum: number | null;
+	default_ttl: number | null;
 	enabled: boolean;
-	spec: Record<string, unknown>;
+	record_count: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface DnsRecordOut {
+	id: number;
+	dns_group_zone_id: number;
+	name: string;
+	type: string;
+	content: string;
+	ttl: number | null;
+	comment: string | null;
+	enabled: boolean;
+	sort_order: number;
 	created_at: string;
 	updated_at: string;
 }

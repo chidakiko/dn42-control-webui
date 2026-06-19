@@ -11,6 +11,7 @@ import type {
 	AuditEntry,
 	DnsGroupOut,
 	DnsGroupZoneOut,
+	DnsRecordOut,
 	EnrollmentTokenCreated,
 	EnrollmentTokenOut,
 	FleetHealth,
@@ -270,7 +271,7 @@ export const api = {
 	updateDnsGroup: (gid: number, body: unknown) =>
 		request<DnsGroupOut>('PATCH', `/api/v1/admin/dns-groups/${gid}`, body),
 	deleteDnsGroup: (gid: number) => request<void>('DELETE', `/api/v1/admin/dns-groups/${gid}`),
-	// 组内 zone（SpecResourceTab 的 update/remove 只传 id，故按 gid 闭包包装）。
+	// 组声明的权威 zone（zone 名 + 可选 SOA 覆盖）。
 	listGroupZones: (gid: number) =>
 		request<DnsGroupZoneOut[]>('GET', `/api/v1/admin/dns-groups/${gid}/zones`),
 	createGroupZone: (gid: number, body: unknown) =>
@@ -279,6 +280,19 @@ export const api = {
 		request<DnsGroupZoneOut>('PATCH', `/api/v1/admin/dns-groups/${gid}/zones/${zid}`, body),
 	deleteGroupZone: (gid: number, zid: number) =>
 		request<void>('DELETE', `/api/v1/admin/dns-groups/${gid}/zones/${zid}`),
+	// 扁平记录（name/type/content/ttl/comment），归属某个 zone。
+	listZoneRecords: (gid: number, zid: number) =>
+		request<DnsRecordOut[]>('GET', `/api/v1/admin/dns-groups/${gid}/zones/${zid}/records`),
+	createZoneRecord: (gid: number, zid: number, body: unknown) =>
+		request<DnsRecordOut>('POST', `/api/v1/admin/dns-groups/${gid}/zones/${zid}/records`, body),
+	updateZoneRecord: (gid: number, zid: number, rid: number, body: unknown) =>
+		request<DnsRecordOut>(
+			'PATCH',
+			`/api/v1/admin/dns-groups/${gid}/zones/${zid}/records/${rid}`,
+			body
+		),
+	deleteZoneRecord: (gid: number, zid: number, rid: number) =>
+		request<void>('DELETE', `/api/v1/admin/dns-groups/${gid}/zones/${zid}/records/${rid}`),
 	// 给节点分配 / 取消（null）DNS 组。
 	assignNodeDnsGroup: (id: string, dnsGroupId: number | null) =>
 		request<DnsGroupOut | null>('PUT', `/api/v1/admin/nodes/${enc(id)}/dns-group`, {
