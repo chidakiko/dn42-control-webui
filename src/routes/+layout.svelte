@@ -19,6 +19,7 @@
 		{ href: '/registrations', key: 'nav.registrations', icon: '⊕' },
 		{ href: '/enrollment-tokens', key: 'nav.enrollment', icon: '🎟' },
 		{ href: '/provision', key: 'nav.provision', icon: '⤓' },
+		{ href: '/dns-groups', key: 'nav.dnsGroups', icon: '◬' },
 		{ href: '/audit', key: 'nav.audit', icon: '☰' }
 	];
 

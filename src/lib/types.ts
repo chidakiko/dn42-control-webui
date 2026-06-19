@@ -17,6 +17,7 @@ export interface NodeOut {
 	base_template: Record<string, unknown>;
 	current_generation: number;
 	lifecycle: string;
+	dns_group_id: number | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -140,9 +141,22 @@ export interface SessionOut {
 	spec: Record<string, unknown>;
 }
 
-export interface DnsZoneOut {
+export interface DnsGroupOut {
 	id: number;
-	node_id: string;
+	name: string;
+	bind_addresses: string[];
+	cache_ttl_seconds: number;
+	forwards: Record<string, unknown>[];
+	enabled: boolean;
+	zone_count: number;
+	member_count: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface DnsGroupZoneOut {
+	id: number;
+	dns_group_id: number;
 	name: string;
 	enabled: boolean;
 	spec: Record<string, unknown>;

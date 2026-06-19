@@ -18,6 +18,7 @@
 	import GenerationsTab from '$lib/components/node/GenerationsTab.svelte';
 	import StatusEventsTab from '$lib/components/node/StatusEventsTab.svelte';
 	import RoutingTab from '$lib/components/node/RoutingTab.svelte';
+	import NodeDnsTab from '$lib/components/node/NodeDnsTab.svelte';
 	import InternalTopologyTab from '$lib/components/node/InternalTopologyTab.svelte';
 	import AgentTokensTab from '$lib/components/node/AgentTokensTab.svelte';
 	import NodeTrends from '$lib/components/node/NodeTrends.svelte';
@@ -229,10 +230,6 @@
   "protocol_suffix": "_v4",
   "enabled": true
 }`;
-	const DNS_EXAMPLE = `{
-  "zone": "example.dn42",
-  "records": []
-}`;
 </script>
 
 <div class="spread" style="margin-bottom:0.5rem">
@@ -358,16 +355,7 @@
 				remove={(id) => api.deleteSession(id)}
 			/>
 		{:else if tab === 'dns'}
-			<SpecResourceTab
-				title={t('node.tab.dns')}
-				singular={t('node.tab.dns')}
-				fields={{ enabled: true }}
-				example={DNS_EXAMPLE}
-				load={() => api.listZones(nodeId)}
-				create={(b) => api.createZone(nodeId, b)}
-				update={(id, b) => api.updateZone(id, b)}
-				remove={(id) => api.deleteZone(id)}
-			/>
+			<NodeDnsTab {nodeId} currentGroupId={node?.dns_group_id ?? null} onchange={loadNode} />
 		{:else if tab === 'internal'}
 			<InternalTopologyTab {nodeId} />
 		{:else if tab === 'routing'}

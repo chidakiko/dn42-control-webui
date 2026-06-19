@@ -9,7 +9,8 @@ import { auth } from './auth.svelte';
 import type {
 	AgentTokenOut,
 	AuditEntry,
-	DnsZoneOut,
+	DnsGroupOut,
+	DnsGroupZoneOut,
 	EnrollmentTokenCreated,
 	EnrollmentTokenOut,
 	FleetHealth,
@@ -67,7 +68,7 @@ export function errorMessage(err: unknown): string {
 	return String(err);
 }
 
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 async function request<T>(
 	method: Method,
@@ -262,14 +263,27 @@ export const api = {
 	deleteSession: (sid: number) =>
 		request<void>('DELETE', `/api/v1/admin/bgp-sessions/${sid}`),
 
-	// --- DNS zones ---
-	listZones: (id: string) =>
-		request<DnsZoneOut[]>('GET', `/api/v1/admin/nodes/${enc(id)}/dns-zones`),
-	createZone: (id: string, body: unknown) =>
-		request<DnsZoneOut>('POST', `/api/v1/admin/nodes/${enc(id)}/dns-zones`, body),
-	updateZone: (zid: number, body: unknown) =>
-		request<DnsZoneOut>('PATCH', `/api/v1/admin/dns-zones/${zid}`, body),
-	deleteZone: (zid: number) => request<void>('DELETE', `/api/v1/admin/dns-zones/${zid}`),
+	// --- DNS groups（共享 / anycast）---
+	listDnsGroups: () => request<DnsGroupOut[]>('GET', `/api/v1/admin/dns-groups`),
+	createDnsGroup: (body: unknown) =>
+		request<DnsGroupOut>('POST', `/api/v1/admin/dns-groups`, body),
+	updateDnsGroup: (gid: number, body: unknown) =>
+		request<DnsGroupOut>('PATCH', `/api/v1/admin/dns-groups/${gid}`, body),
+	deleteDnsGroup: (gid: number) => request<void>('DELETE', `/api/v1/admin/dns-groups/${gid}`),
+	// 组内 zone（SpecResourceTab 的 update/remove 只传 id，故按 gid 闭包包装）。
+	listGroupZones: (gid: number) =>
+		request<DnsGroupZoneOut[]>('GET', `/api/v1/admin/dns-groups/${gid}/zones`),
+	createGroupZone: (gid: number, body: unknown) =>
+		request<DnsGroupZoneOut>('POST', `/api/v1/admin/dns-groups/${gid}/zones`, body),
+	updateGroupZone: (gid: number, zid: number, body: unknown) =>
+		request<DnsGroupZoneOut>('PATCH', `/api/v1/admin/dns-groups/${gid}/zones/${zid}`, body),
+	deleteGroupZone: (gid: number, zid: number) =>
+		request<void>('DELETE', `/api/v1/admin/dns-groups/${gid}/zones/${zid}`),
+	// 给节点分配 / 取消（null）DNS 组。
+	assignNodeDnsGroup: (id: string, dnsGroupId: number | null) =>
+		request<DnsGroupOut | null>('PUT', `/api/v1/admin/nodes/${enc(id)}/dns-group`, {
+			dns_group_id: dnsGroupId
+		}),
 
 	// --- Agent tokens ---
 	listAgentTokens: (id: string) =>
