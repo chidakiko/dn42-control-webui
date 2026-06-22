@@ -10,6 +10,7 @@ export interface NodeOut {
 	site: string | null;
 	loopback_ipv4: string | null;
 	loopback_ipv6: string | null;
+	link_local: string | null;
 	ipv4_prefixes: string[];
 	ipv6_prefixes: string[];
 	inventory: Record<string, unknown>;
@@ -29,6 +30,7 @@ export interface NodeIn {
 	site?: string | null;
 	loopback_ipv4?: string | null;
 	loopback_ipv6?: string | null;
+	link_local?: string | null;
 	ipv4_prefixes?: string[];
 	ipv6_prefixes?: string[];
 	inventory?: Record<string, unknown>;

@@ -64,7 +64,7 @@
 	// edit modal
 	let showEdit = $state(false);
 	let saving = $state(false);
-	let e = $state({ asn: '', router_id: '', site: '', loopback_ipv4: '', loopback_ipv6: '' });
+	let e = $state({ asn: '', router_id: '', site: '', loopback_ipv4: '', loopback_ipv6: '', link_local: '' });
 	let baseText = $state('{}');
 	let labelsText = $state('{}');
 	let baseEditor: JsonEditor;
@@ -136,7 +136,8 @@
 			router_id: node.router_id,
 			site: node.site ?? '',
 			loopback_ipv4: node.loopback_ipv4 ?? '',
-			loopback_ipv6: node.loopback_ipv6 ?? ''
+			loopback_ipv6: node.loopback_ipv6 ?? '',
+			link_local: node.link_local ?? ''
 		};
 		baseText = JSON.stringify(node.base_template, null, 2);
 		labelsText = JSON.stringify(node.labels, null, 2);
@@ -156,6 +157,7 @@
 				site: e.site.trim() || null,
 				loopback_ipv4: e.loopback_ipv4.trim() || null,
 				loopback_ipv6: e.loopback_ipv6.trim() || null,
+				link_local: e.link_local.trim() || null,
 				base_template: JSON.parse(baseText),
 				labels: JSON.parse(labelsText)
 			});
@@ -300,6 +302,7 @@
 				<div><span class="k">{t('node.f.site')}</span><span>{node.site ?? '—'}</span></div>
 				<div><span class="k">{t('node.f.lo4')}</span><span class="mono">{node.loopback_ipv4 ?? '—'}</span></div>
 				<div><span class="k">{t('node.f.lo6')}</span><span class="mono">{node.loopback_ipv6 ?? '—'}</span></div>
+				<div><span class="k">{t('node.f.lla')}</span><span class="mono">{node.link_local ?? '—'}</span></div>
 				<div><span class="k">{t('node.f.gen')}</span><span class="mono">{node.current_generation}</span></div>
 				<div><span class="k">{t('node.f.created')}</span><span class="faint">{fmtTime(node.created_at)}</span></div>
 				<div><span class="k">{t('node.f.updated')}</span><span class="faint">{fmtTime(node.updated_at)}</span></div>
@@ -393,6 +396,7 @@
 		<label class="field"><span>{t('node.f.site')}</span><input bind:value={e.site} /></label>
 		<label class="field"><span>{t('node.f.lo4')}</span><input bind:value={e.loopback_ipv4} /></label>
 		<label class="field"><span>{t('node.f.lo6')}</span><input bind:value={e.loopback_ipv6} /></label>
+		<label class="field"><span>{t('node.f.lla')}</span><input bind:value={e.link_local} placeholder="fe80::28" /></label>
 	</div>
 	<JsonEditor bind:this={labelsEditor} bind:text={labelsText} label={t('node.f.labels')} rows={4} />
 	<JsonEditor bind:this={baseEditor} bind:text={baseText} label={t('nodes.f.base')} rows={12} />
