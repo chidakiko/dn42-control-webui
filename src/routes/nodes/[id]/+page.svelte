@@ -22,6 +22,7 @@
 	import InternalTopologyTab from '$lib/components/node/InternalTopologyTab.svelte';
 	import AgentTokensTab from '$lib/components/node/AgentTokensTab.svelte';
 	import NodeTrends from '$lib/components/node/NodeTrends.svelte';
+	import NodeSelfMetrics from '$lib/components/node/NodeSelfMetrics.svelte';
 
 	let nodeId = $derived(page.params.id ?? '');
 
@@ -292,6 +293,7 @@
 				</div>
 			</div>
 			<NodeTrends {nodeId} />
+			<NodeSelfMetrics {nodeId} />
 			<div class="grid">
 				<div><span class="k">{t('node.f.asn')}</span><span class="mono">{node.asn}</span></div>
 				<div><span class="k">{t('node.f.routerId')}</span><span class="mono">{node.router_id}</span></div>
