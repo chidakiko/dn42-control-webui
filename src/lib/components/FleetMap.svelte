@@ -785,21 +785,19 @@
 	first: string
 )}
 	<div class="grp-head">
-		<Tooltip label={t('topo.focusTip')} side="top">
-			{#snippet trigger(props)}
-				<button
-					{...props}
-					class="grp-focus"
-					onclick={() => focusAt(fx, fy, fk)}
-					onpointerenter={() => (hovered = first)}
-					onpointerleave={() => (hovered = null)}
-				>
-					<span class="grp-dot" style="background:{COLOR[worst]}"></span>
-					<span class="grp-city">{label}</span>
-					<span class="grp-count">{count}</span>
-				</button>
-			{/snippet}
-		</Tooltip>
+		<!-- native title (not the bits-ui Tooltip): the hover also sets `hovered`, which
+		     re-renders the list and would restart a timed tooltip's open delay → flicker. -->
+		<button
+			class="grp-focus"
+			title={t('topo.focusTip')}
+			onclick={() => focusAt(fx, fy, fk)}
+			onpointerenter={() => (hovered = first)}
+			onpointerleave={() => (hovered = null)}
+		>
+			<span class="grp-dot" style="background:{COLOR[worst]}"></span>
+			<span class="grp-city">{label}</span>
+			<span class="grp-count">{count}</span>
+		</button>
 		<span class="r-grow"></span>
 		<button class="grp-toggle" onclick={() => toggleGroup(key)} aria-label="toggle">
 			<span class="chev" class:closed={collapsed.has(key)}>

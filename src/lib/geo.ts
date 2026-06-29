@@ -72,7 +72,7 @@ export const REGIONS: Record<RegionCode, RegionInfo> = {
 // extend freely. The +1000 BGP country community is just `1000 + numeric`.
 export const COUNTRIES: Record<number, CountryInfo> = {
 	// Asia-East (52)
-	156: { name: 'China', alpha2: 'CN', region: 52 },
+	156: { name: 'China Mainland', alpha2: 'CN', region: 52 },
 	344: { name: 'Hong Kong', alpha2: 'HK', region: 52 },
 	446: { name: 'Macao', alpha2: 'MO', region: 52 },
 	158: { name: 'Taiwan', alpha2: 'TW', region: 52 },
