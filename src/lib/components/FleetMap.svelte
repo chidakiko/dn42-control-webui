@@ -865,7 +865,7 @@
 					</span>
 				{/if}
 				<span class="r-grow"></span>
-				<span class="m-when {freshness(n.last_snapshot_at)}">{relTime(n.last_snapshot_at)}</span>
+				<span class="m-when {freshness(n.last_heartbeat_at)}">{relTime(n.last_heartbeat_at)}</span>
 			</div>
 		</div>
 		<Tooltip label={t('dash.requestSnapshot')} side="left">
@@ -876,7 +876,7 @@
 					onclick={(e) => requestSnapshot(e, n.node_id)}
 					aria-label={t('dash.requestSnapshot')}
 				>
-					<Icon name="refresh" size={13} />
+					<Icon name="camera" size={13} />
 				</button>
 			{/snippet}
 		</Tooltip>
