@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
-	import type { FleetOverview, TrafficPoint, FleetTrafficBreakdown } from '$lib/types';
+	import type {
+		FleetOverview,
+		TrafficPoint,
+		FleetTrafficBreakdown,
+		PeeringIssue
+	} from '$lib/types';
 	import FleetRouting from '$lib/components/FleetRouting.svelte';
 	import { fmtBytes } from '$lib/format';
 	import { autoRefresh } from '$lib/refresh.svelte';
@@ -61,6 +66,10 @@
 	});
 	let maxTrafRate = $derived(trafRows.reduce((m, r) => Math.max(m, r.rx + r.tx), 0) || 1);
 
+	// fleet peering health: BGP/peering sessions that aren't Established
+	let peeringIssues = $state<PeeringIssue[]>([]);
+	let peeringLoaded = $state(false);
+
 	let data = $state<FleetOverview | null>(null);
 	let loading = $state(true);
 	let error = $state('');
@@ -88,6 +97,13 @@
 			breakdown = null;
 		} finally {
 			breakdownLoaded = true;
+		}
+		try {
+			peeringIssues = (await api.fleetPeeringIssues()).issues;
+		} catch {
+			peeringIssues = [];
+		} finally {
+			peeringLoaded = true;
 		}
 	}
 
@@ -137,6 +153,48 @@
 				</div>
 			</div>
 		{/if}
+	</div>
+
+	<!-- peering issues — fleet BGP/peering sessions not established -->
+	<div class="doc-peering" style="margin-top:1.75rem">
+		<div class="page-head" style="margin-bottom:1rem">
+			<div>
+				<div class="ph-title">
+					<Icon name="bird" size={20} />
+					<h2 style="margin:0; font-size:1.15rem">{t('dash.peering.title')}</h2>
+				</div>
+				<p class="ph-sub">{t('dash.peering.subtitle')}</p>
+			</div>
+			{#if peeringLoaded && peeringIssues.length > 0}
+				<span class="kpi"><strong class="bad-num">{peeringIssues.length}</strong> {t('dash.peering.count', peeringIssues.length)}</span>
+			{/if}
+		</div>
+		<div class="card">
+			{#if !peeringLoaded}
+				<div class="pi-rows">
+					{#each Array(3) as _, i (i)}<Skeleton h="1.9rem" />{/each}
+				</div>
+			{:else if peeringIssues.length === 0}
+				<div class="pi-ok"><Icon name="shield-check" size={16} />{t('dash.peering.allUp')}</div>
+			{:else}
+				<div class="pi-rows">
+					{#each peeringIssues as p (p.node_id + '/' + p.name)}
+						<a
+							class="pi-row"
+							href="/nodes/{p.node_id}?tab=bgp-sessions"
+							style="--pi:{p.health === 'down' ? 'var(--c-bad)' : 'var(--c-warn)'}"
+						>
+							<span class="pi-dot"></span>
+							<span class="pi-node mono">{p.node_id}</span>
+							<span class="pi-name mono">{p.name}</span>
+							<span class="pi-scope">{p.scope === 'external' ? 'eBGP' : 'iBGP'}</span>
+							<span class="grow"></span>
+							<span class="pi-state" style="color:var(--pi)">{p.state ?? p.health}</span>
+						</a>
+					{/each}
+				</div>
+			{/if}
+		</div>
 	</div>
 
 	<!-- routing — FleetRouting renders its own static header + shape-matched skeleton -->
@@ -221,6 +279,72 @@
 	.kpi {
 		font-size: 0.85rem;
 		color: var(--text-dim);
+	}
+	.kpi .bad-num {
+		color: var(--c-bad);
+	}
+	/* peering issues list */
+	.pi-ok {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		color: var(--c-ok);
+		font-size: 0.88rem;
+	}
+	.pi-rows {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+	}
+	.pi-row {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.4rem 0.5rem;
+		border-radius: var(--radius-sm);
+		color: inherit;
+	}
+	.pi-row:hover {
+		background: var(--bg-elev-2);
+		text-decoration: none;
+	}
+	.pi-row .grow {
+		flex: 1;
+	}
+	.pi-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--pi);
+		flex: none;
+	}
+	.pi-node {
+		font-weight: 600;
+		color: var(--text);
+		font-size: 0.84rem;
+	}
+	.pi-name {
+		font-size: 0.8rem;
+		color: var(--text-dim);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.pi-scope {
+		font-size: 0.64rem;
+		font-weight: 700;
+		color: var(--text-faint);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		padding: 0.02rem 0.3rem;
+		flex: none;
+	}
+	.pi-state {
+		font-size: 0.78rem;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
 	}
 	.topo-head {
 		margin-bottom: 1rem;

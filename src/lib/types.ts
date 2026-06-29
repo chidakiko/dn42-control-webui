@@ -204,6 +204,12 @@ export interface BgpSessionStatus {
 	since: string | null;
 	info: string | null;
 }
+export interface PeeringIssue extends BgpSessionStatus {
+	node_id: string;
+}
+export interface FleetPeeringIssues {
+	issues: PeeringIssue[];
+}
 export interface NodeBgpSessions {
 	node_id: string;
 	sessions: BgpSessionStatus[];
@@ -513,6 +519,7 @@ export interface FleetRoutingOverview {
 	nodes: FleetRoutingNode[];
 	trend: FleetRoutingTrendPoint[];
 	origins: Array<{ asn: number; count: number }>;
+	invalid_routes: Array<{ prefix: string; origin_asn: number | null; node_count: number }>;
 }
 
 // iBGP/OSPF are not bgp_sessions records — they are synthesised from

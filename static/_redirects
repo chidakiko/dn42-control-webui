@@ -1,0 +1,4 @@
+# SPA fallback: this is a pure client-side SvelteKit app (adapter-static,
+# ssr=false, prerender=false). Every unknown path must serve the fallback
+# index.html with a 200 so client-side routing can take over.
+/*  /index.html  200

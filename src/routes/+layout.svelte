@@ -315,6 +315,7 @@
 		font-weight: 700;
 		font-size: 0.95rem;
 		letter-spacing: -0.01em;
+		white-space: nowrap;
 	}
 	.wordmark-sub {
 		font-weight: 500;
@@ -340,7 +341,15 @@
 		color: var(--text-dim);
 		font-size: 0.9rem;
 		font-weight: 500;
+		/* keep the label on one line: during the collapse→expand width animation the
+		   bar is briefly narrow, and without nowrap the text would wrap vertically
+		   (one char per line) until the width catches up. Sidebar overflow:hidden
+		   clips the still-hidden part, so it reveals horizontally instead. */
+		white-space: nowrap;
 		transition: background 0.12s, color 0.12s;
+	}
+	.sidebar nav a .lbl {
+		overflow: hidden;
 	}
 	.collapsed .sidebar nav a {
 		justify-content: center;

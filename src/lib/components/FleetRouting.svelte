@@ -55,6 +55,9 @@
 		data ? data.summary.rpki.valid + data.summary.rpki.invalid + data.summary.rpki.not_found : 0
 	);
 	let invalidTotal = $derived(data ? data.summary.rpki.invalid : 0);
+	// fleet RPKI-invalid routes that leaked into the accepted RIB (expandable detail)
+	let invalidRoutes = $derived(data?.invalid_routes ?? []);
+	let showInvalid = $state(false);
 
 	// fleet address-family split donut (IPv4 / IPv6)
 	let famTotal = $derived(data ? data.summary.route_count_v4 + data.summary.route_count_v6 : 0);
@@ -255,10 +258,33 @@
 		</div>
 	{/if}
 	{#if invalidTotal > 0}
-		<div class="rt-alert">
+		<button
+			class="rt-alert rt-alert-btn"
+			onclick={() => (showInvalid = !showInvalid)}
+			aria-expanded={showInvalid}
+		>
 			<Icon name="alert-triangle" size={15} />
-			{t('dash.routing.invalidAlert', invalidTotal)}
-		</div>
+			<span>{t('dash.routing.invalidAlert', invalidTotal)}</span>
+			<span class="grow"></span>
+			{#if invalidRoutes.length}
+				<span class="rt-alert-toggle">
+					{t('routing.invalidDetail')}
+					<span class="rt-chev" class:open={showInvalid}><Icon name="chevron-down" size={14} /></span>
+				</span>
+			{/if}
+		</button>
+		{#if showInvalid && invalidRoutes.length}
+			<div class="rt-invalid">
+				{#each invalidRoutes as r (r.prefix + '/' + r.origin_asn)}
+					<div class="rt-invalid-row">
+						<span class="mono rt-inv-prefix">{r.prefix}</span>
+						<span class="mono faint">{r.origin_asn ? 'AS' + r.origin_asn : '—'}</span>
+						<span class="grow"></span>
+						<span class="faint">{t('routing.invalidSeen', r.node_count)}</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
 	{/if}
 
 	<div class="rt-2col">
@@ -397,6 +423,55 @@
 		background: color-mix(in srgb, var(--c-bad) 12%, transparent);
 		border: 1px solid color-mix(in srgb, var(--c-bad) 30%, transparent);
 		border-radius: var(--radius);
+	}
+	.rt-alert-btn {
+		width: 100%;
+		text-align: left;
+		cursor: pointer;
+		font: inherit;
+	}
+	.rt-alert .grow {
+		flex: 1;
+	}
+	.rt-alert-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		font-weight: 600;
+		white-space: nowrap;
+	}
+	.rt-chev {
+		display: inline-flex;
+		transition: transform 0.15s ease;
+	}
+	.rt-chev.open {
+		transform: rotate(180deg);
+	}
+	/* expandable RPKI-invalid route detail (prefix · origin AS · seen on N nodes) */
+	.rt-invalid {
+		margin-top: 0.4rem;
+		border: 1px solid color-mix(in srgb, var(--c-bad) 22%, transparent);
+		border-radius: var(--radius);
+		overflow: hidden;
+	}
+	.rt-invalid-row {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.4rem 0.8rem;
+		font-size: 0.8rem;
+		color: var(--text-dim);
+		border-top: 1px solid var(--border);
+	}
+	.rt-invalid-row:first-child {
+		border-top: none;
+	}
+	.rt-invalid-row .grow {
+		flex: 1;
+	}
+	.rt-inv-prefix {
+		color: var(--text);
+		font-weight: 600;
 	}
 
 	.rt-2col {
