@@ -191,14 +191,27 @@
 
 	type Edge = { a: string; b: string; ifaceA?: string | null; ifaceB?: string | null; cost?: number | null };
 	let edges = $derived<Edge[]>(links.map((l) => ({ a: l.a, b: l.b, ifaceA: l.a_iface, ifaceB: l.b_iface, cost: l.cost })));
-	// Drop intra-cluster edges (both endpoints collapsed onto the same point).
-	let drawnEdges = $derived(
-		edges.filter((e) => {
+	// Merge edges that collapse onto the same pair of on-screen points (e.g. several
+	// physical links between two clustered cities draw as one line). Intra-cluster
+	// edges (both endpoints on the same point) are dropped. Each merged edge keeps its
+	// member links so the hover tooltip can list everything that was folded together.
+	type MergedEdge = { key: string; pa: { lon: number; lat: number }; pb: { lon: number; lat: number }; members: Edge[] };
+	let drawnEdges = $derived.by(() => {
+		const m = new Map<string, MergedEdge>();
+		const p = (x: number, y: number) => `${x.toFixed(1)},${y.toFixed(1)}`;
+		for (const e of edges) {
 			const pa = posOf.get(e.a);
 			const pb = posOf.get(e.b);
-			return pa && pb && (pa.x !== pb.x || pa.y !== pb.y);
-		})
-	);
+			if (!pa || !pb || (pa.x === pb.x && pa.y === pb.y)) continue;
+			const ka = p(pa.x, pa.y);
+			const kb = p(pb.x, pb.y);
+			const key = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+			let grp = m.get(key);
+			if (!grp) m.set(key, (grp = { key, pa, pb, members: [] }));
+			grp.members.push(e);
+		}
+		return [...m.values()];
+	});
 
 	// --- land outline ---
 	let landPaths = $state<string[]>([]);
@@ -322,11 +335,16 @@
 		cy = CY0;
 	}
 	// Click a cluster → zoom in and centre on it (so it splits into its members).
-	function focusCluster(c: { x: number; y: number }) {
-		cx = c.x;
-		cy = c.y;
-		k = Math.max(SPLIT_K, k);
+	// Centre the map on (x,y) and zoom to at least `minK`. Map clusters split to
+	// nodes (SPLIT_K); list headers focus at their level (region/country/city).
+	function focusAt(x: number, y: number, minK: number) {
+		cx = x;
+		cy = y;
+		k = Math.max(minK, k);
 		clampCenter();
+	}
+	function focusCluster(c: { x: number; y: number }) {
+		focusAt(c.x, c.y, SPLIT_K);
 	}
 
 	// --- edge hover tooltip (follows the cursor + clamped into view, so it stays
@@ -334,10 +352,9 @@
 	let hoverEdge = $state<string | null>(null);
 	let ptrX = $state(0);
 	let ptrY = $state(0);
-	const edgeKey = (e: Edge) => `${e.a}|${e.b}`;
-	let hoveredEdge = $derived(hoverEdge ? edges.find((x) => edgeKey(x) === hoverEdge) ?? null : null);
-	let tipLeft = $derived(clamp(ptrX + 14, 4, Math.max(4, stageW - 170)));
-	let tipTop = $derived(clamp(ptrY + 14, 4, Math.max(4, stageH - 60)));
+	let hoveredEdge = $derived(hoverEdge ? drawnEdges.find((x) => x.key === hoverEdge) ?? null : null);
+	let tipLeft = $derived(clamp(ptrX + 14, 4, Math.max(4, stageW - 200)));
+	let tipTop = $derived(clamp(ptrY + 14, 4, Math.max(4, stageH - 80)));
 
 	// --- shared hover state (map ↔ list) ---
 	let hovered = $state<string | null>(null);
@@ -372,18 +389,46 @@
 		return c.group.every((n) => nodeDim(n));
 	}
 
-	// Node list grouped by CITY (stable regardless of map zoom level): worst-health
-	// first, then region → city; nodes within a group also worst-first. Nodes with no
-	// known location go to a trailing "unlocated" group so they stay visible.
-	let listGroups = $derived.by(() => {
-		type Grp = {
-			key: string;
-			label: string;
-			sub: string | null;
-			region: number;
-			nodes: FleetOverviewNode[];
-		};
-		const m = new Map<string, Grp>();
+	// Node list as a collapsible REGION → COUNTRY → CITY → nodes tree (stable
+	// regardless of map zoom). Each level is worst-health first; nodes with no known
+	// location go to a trailing "unlocated" group. Every level carries a centroid so
+	// its header can focus the map at the matching granularity.
+	const byWorst = (a: FleetOverviewNode, b: FleetOverviewNode) =>
+		SEV[b.health] - SEV[a.health] || a.node_id.localeCompare(b.node_id);
+	const worstOf = (ns: FleetOverviewNode[]) =>
+		ns.reduce<NodeHealthValue>((w, n) => (SEV[n.health] > SEV[w] ? n.health : w), 'ok');
+	const centroidOf = (ns: FleetOverviewNode[]): [number, number] => {
+		let sx = 0;
+		let sy = 0;
+		let nLoc = 0;
+		for (const n of ns) {
+			const g = geoOf.get(n.node_id);
+			if (!g?.coord) continue;
+			const [x, y] = proj(g.coord[1], g.coord[0]);
+			sx += x;
+			sy += y;
+			nLoc++;
+		}
+		return nLoc ? [sx / nLoc, sy / nLoc] : [CX0, CY0];
+	};
+
+	type CityLvl = {
+		key: string;
+		label: string;
+		worst: NodeHealthValue;
+		x: number;
+		y: number;
+		first: string;
+		nodes: FleetOverviewNode[];
+	};
+	type CountryLvl = Omit<CityLvl, 'nodes'> & { count: number; cities: CityLvl[] };
+	type RegionLvl = Omit<CityLvl, 'nodes'> & { region: number; count: number; countries: CountryLvl[] };
+
+	let listTree = $derived.by(() => {
+		type YAcc = { key: string; label: string; nodes: FleetOverviewNode[] };
+		type CAcc = { key: string; label: string; cities: Map<string, YAcc> };
+		type RAcc = { key: string; label: string; region: number; countries: Map<string, CAcc> };
+		const racc = new Map<string, RAcc>();
 		const unlocated: FleetOverviewNode[] = [];
 		for (const n of nodes) {
 			const g = geoOf.get(n.node_id);
@@ -391,59 +436,44 @@
 				unlocated.push(n);
 				continue;
 			}
-			const key = g.site ?? (g.region != null ? `r${g.region}` : `p${g.coord[0]},${g.coord[1]}`);
-			let grp = m.get(key);
-			if (!grp)
-				m.set(
-					key,
-					(grp = {
-						key,
-						label: g.cityName ?? g.regionName ?? '—',
-						sub: g.countryName ?? g.regionName ?? null,
-						region: g.region ?? 999,
-						nodes: []
-					})
-				);
-			grp.nodes.push(n);
+			const rnum = g.region ?? 999;
+			const rkey = `R:${rnum}`;
+			let r = racc.get(rkey);
+			if (!r) racc.set(rkey, (r = { key: rkey, label: g.regionName ?? '—', region: rnum, countries: new Map() }));
+			const ckey = `C:${rnum}:${g.country ?? 0}`;
+			let c = r.countries.get(ckey);
+			if (!c) r.countries.set(ckey, (c = { key: ckey, label: g.countryName ?? g.regionName ?? '—', cities: new Map() }));
+			const ykey = `Y:${g.site ?? `r${rnum}`}`;
+			let y = c.cities.get(ykey);
+			if (!y) c.cities.set(ykey, (y = { key: ykey, label: g.cityName ?? g.regionName ?? '—', nodes: [] }));
+			y.nodes.push(n);
 		}
-		const byWorst = (a: FleetOverviewNode, b: FleetOverviewNode) =>
-			SEV[b.health] - SEV[a.health] || a.node_id.localeCompare(b.node_id);
-		const worstOf = (ns: FleetOverviewNode[]) =>
-			ns.reduce<NodeHealthValue>((w, n) => (SEV[n.health] > SEV[w] ? n.health : w), 'ok');
-		const centroid = (ns: FleetOverviewNode[]): [number, number] => {
-			let sx = 0;
-			let sy = 0;
-			let nLoc = 0;
-			for (const n of ns) {
-				const g = geoOf.get(n.node_id);
-				if (!g?.coord) continue;
-				const [x, y] = proj(g.coord[1], g.coord[0]);
-				sx += x;
-				sy += y;
-				nLoc++;
-			}
-			return nLoc ? [sx / nLoc, sy / nLoc] : [CX0, CY0];
+		const byWorstLvl = <T extends { worst: NodeHealthValue; label: string }>(a: T, b: T) =>
+			SEV[b.worst] - SEV[a.worst] || a.label.localeCompare(b.label);
+		const buildCity = (y: YAcc): CityLvl => {
+			const ns = [...y.nodes].sort(byWorst);
+			const [x, cy] = centroidOf(ns);
+			return { key: y.key, label: y.label, worst: worstOf(ns), x, y: cy, first: ns[0].node_id, nodes: ns };
 		};
-		const groups = [...m.values()]
-			.map((grp) => {
-				const [x, y] = centroid(grp.nodes);
-				return { ...grp, x, y, nodes: [...grp.nodes].sort(byWorst), worst: worstOf(grp.nodes) };
-			})
-			.sort(
-				(a, b) => SEV[b.worst] - SEV[a.worst] || a.region - b.region || a.label.localeCompare(b.label)
-			);
-		if (unlocated.length)
-			groups.push({
-				key: '__unlocated',
-				label: t('topo.unlocated'),
-				sub: null,
-				region: 1000,
-				x: CX0,
-				y: CY0,
-				nodes: [...unlocated].sort(byWorst),
-				worst: worstOf(unlocated)
-			});
-		return groups;
+		const buildCountry = (c: CAcc): CountryLvl => {
+			const cities = [...c.cities.values()].map(buildCity).sort(byWorstLvl);
+			const ns = cities.flatMap((y) => y.nodes);
+			const [x, y] = centroidOf(ns);
+			return { key: c.key, label: c.label, worst: worstOf(ns), x, y, first: ns[0].node_id, count: ns.length, cities };
+		};
+		const buildRegion = (r: RAcc): RegionLvl => {
+			const countries = [...r.countries.values()].map(buildCountry).sort(byWorstLvl);
+			const ns = countries.flatMap((c) => c.cities.flatMap((y) => y.nodes));
+			const [x, y] = centroidOf(ns);
+			return { key: r.key, label: r.label, region: r.region, worst: worstOf(ns), x, y, first: ns[0].node_id, count: ns.length, countries };
+		};
+		const regions = [...racc.values()]
+			.map(buildRegion)
+			.sort((a, b) => SEV[b.worst] - SEV[a.worst] || a.region - b.region || a.label.localeCompare(b.label));
+		const unloc = unlocated.length
+			? { key: 'R:unlocated', label: t('topo.unlocated'), worst: worstOf(unlocated), nodes: [...unlocated].sort(byWorst) }
+			: null;
+		return { regions, unlocated: unloc };
 	});
 	let collapsed = $state(new Set<string>());
 	function toggleGroup(r: string) {
@@ -551,34 +581,32 @@
 			<svg viewBox="{vx} {vy} {vw} {vh}" preserveAspectRatio="xMidYMid meet">
 				<g class="land"><path d={landPaths.join(' ')} /></g>
 				<g class="edges" fill="none">
-					{#each drawnEdges as e (e.a + e.b)}
-						{@const pa = posOf.get(e.a)}
-						{@const pb = posOf.get(e.b)}
-						{#if pa && pb}
-							{@const d = gcPath(pa.lon, pa.lat, pb.lon, pb.lat)}
-							{@const isHot = hoverEdge === edgeKey(e)}
-							{@const lit = !hovered || hovered === e.a || hovered === e.b}
-							<path
-								{d}
-								stroke="var(--accent)"
-								stroke-width={isHot ? 2.4 : lit && hovered ? 2.2 : 1.3}
-								opacity={hoverEdge ? (isHot ? 0.9 : 0.1) : lit ? 0.6 : 0.1}
-								stroke-linecap="round"
-								vector-effect="non-scaling-stroke"
-							/>
-							<!-- wide invisible hit area for hover; doesn't block panning -->
-							<path
-								{d}
-								stroke="transparent"
-								stroke-width="12"
-								stroke-linecap="round"
-								vector-effect="non-scaling-stroke"
-								style="cursor:pointer"
-								role="presentation"
-								onpointerenter={() => (hoverEdge = edgeKey(e))}
-								onpointerleave={() => (hoverEdge = null)}
-							/>
-						{/if}
+					{#each drawnEdges as e (e.key)}
+						{@const d = gcPath(e.pa.lon, e.pa.lat, e.pb.lon, e.pb.lat)}
+						{@const isHot = hoverEdge === e.key}
+						{@const lit =
+							!hovered || e.members.some((m) => m.a === hovered || m.b === hovered)}
+						{@const multi = e.members.length > 1}
+						<path
+							{d}
+							stroke="var(--accent)"
+							stroke-width={isHot ? 2.4 : multi ? 2 : lit && hovered ? 2.2 : 1.3}
+							opacity={hoverEdge ? (isHot ? 0.9 : 0.1) : lit ? 0.6 : 0.1}
+							stroke-linecap="round"
+							vector-effect="non-scaling-stroke"
+						/>
+						<!-- wide invisible hit area for hover; doesn't block panning -->
+						<path
+							{d}
+							stroke="transparent"
+							stroke-width="12"
+							stroke-linecap="round"
+							vector-effect="non-scaling-stroke"
+							style="cursor:pointer"
+							role="presentation"
+							onpointerenter={() => (hoverEdge = e.key)}
+							onpointerleave={() => (hoverEdge = null)}
+						/>
 					{/each}
 				</g>
 			</svg>
@@ -672,56 +700,114 @@
 
 			{#if hoveredEdge}
 				<div class="edge-tip" style="left:{tipLeft}px; top:{tipTop}px">
-					<span class="et-row"><span class="mono">{hoveredEdge.a}</span> {hoveredEdge.ifaceA ?? '—'}</span>
-					<span class="et-row"><span class="mono">{hoveredEdge.b}</span> {hoveredEdge.ifaceB ?? '—'}</span>
-					{#if hoveredEdge.cost != null}<span class="et-cost">OSPF cost {hoveredEdge.cost}</span>{/if}
+					{#if hoveredEdge.members.length > 1}
+						<span class="et-head">{hoveredEdge.members.length} {t('topo.sumLinks')}</span>
+					{/if}
+					{#each hoveredEdge.members.slice(0, 6) as m (m.a + '|' + m.b)}
+						<span class="et-link">
+							<span class="et-ep"><span class="mono">{m.a}</span> {m.ifaceA ?? '—'}</span>
+							<Icon name="route" size={11} />
+							<span class="et-ep"><span class="mono">{m.b}</span> {m.ifaceB ?? '—'}</span>
+							{#if m.cost != null}<span class="et-cost">cost {m.cost}</span>{/if}
+						</span>
+					{/each}
+					{#if hoveredEdge.members.length > 6}
+						<span class="et-more">+{hoveredEdge.members.length - 6} …</span>
+					{/if}
 				</div>
 			{/if}
 		</div>
 	</div>
 
-	<!-- ===== node list (grouped by city) ===== -->
+	<!-- ===== node list: collapsible region → country → city → nodes tree ===== -->
 		<div class="list">
-			{#each listGroups as g (g.key)}
-				{#if g.nodes.length > 1}
-					<div class="grp">
-						<div class="grp-head">
-							<Tooltip label={t('topo.focusTip')} side="top">
-								{#snippet trigger(props)}
-									<button
-										{...props}
-										class="grp-focus"
-										onclick={() => focusCluster(g)}
-										onpointerenter={() => (hovered = g.nodes[0].node_id)}
-										onpointerleave={() => (hovered = null)}
-									>
-										<span class="grp-dot" style="background:{COLOR[g.worst]}"></span>
-										<span class="grp-city">{g.label}</span>
-										{#if g.sub}<span class="grp-sub">{g.sub}</span>{/if}
-										<span class="grp-count">{g.nodes.length}</span>
-									</button>
-								{/snippet}
-							</Tooltip>
-							<span class="r-grow"></span>
-							<button class="grp-toggle" onclick={() => toggleGroup(g.key)} aria-label="toggle">
-								<span class="chev" class:closed={collapsed.has(g.key)}>
-									<Icon name="chevron-down" size={14} />
-								</span>
-							</button>
+			{#each listTree.regions as r (r.key)}
+				<div class="grp lvl-region">
+					{@render head(r.label, r.worst, r.count, r.key, r.x, r.y, 2.3, r.first)}
+					{#if !collapsed.has(r.key)}
+						<div class="grp-body">
+							{#each r.countries as c (c.key)}
+								<div class="grp lvl-country">
+									{@render head(c.label, c.worst, c.count, c.key, c.x, c.y, 3.8, c.first)}
+									{#if !collapsed.has(c.key)}
+										<div class="grp-body">
+											{#each c.cities as y (y.key)}
+												<div class="grp lvl-city">
+													{@render head(y.label, y.worst, y.nodes.length, y.key, y.x, y.y, SPLIT_K, y.first)}
+													{#if !collapsed.has(y.key)}
+														<div class="grp-body">
+															{#each y.nodes as n (n.node_id)}{@render nodeRow(n)}{/each}
+														</div>
+													{/if}
+												</div>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{/each}
 						</div>
-						{#if !collapsed.has(g.key)}
-							<div class="grp-body">
-								{#each g.nodes as n (n.node_id)}{@render nodeRow(n)}{/each}
-							</div>
-						{/if}
-					</div>
-				{:else}
-					{@render nodeRow(g.nodes[0])}
-				{/if}
+					{/if}
+				</div>
 			{/each}
+			{#if listTree.unlocated}
+				{@const u = listTree.unlocated}
+				<div class="grp">
+					<div class="grp-head">
+						<span class="grp-dot" style="background:{COLOR[u.worst]}"></span>
+						<span class="grp-city">{u.label}</span>
+						<span class="grp-count">{u.nodes.length}</span>
+						<span class="r-grow"></span>
+						<button class="grp-toggle" onclick={() => toggleGroup(u.key)} aria-label="toggle">
+							<span class="chev" class:closed={collapsed.has(u.key)}>
+								<Icon name="chevron-down" size={14} />
+							</span>
+						</button>
+					</div>
+					{#if !collapsed.has(u.key)}
+						<div class="grp-body">
+							{#each u.nodes as n (n.node_id)}{@render nodeRow(n)}{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
 		</div>
 	</div>
 </div>
+
+{#snippet head(
+	label: string,
+	worst: NodeHealthValue,
+	count: number,
+	key: string,
+	fx: number,
+	fy: number,
+	fk: number,
+	first: string
+)}
+	<div class="grp-head">
+		<Tooltip label={t('topo.focusTip')} side="top">
+			{#snippet trigger(props)}
+				<button
+					{...props}
+					class="grp-focus"
+					onclick={() => focusAt(fx, fy, fk)}
+					onpointerenter={() => (hovered = first)}
+					onpointerleave={() => (hovered = null)}
+				>
+					<span class="grp-dot" style="background:{COLOR[worst]}"></span>
+					<span class="grp-city">{label}</span>
+					<span class="grp-count">{count}</span>
+				</button>
+			{/snippet}
+		</Tooltip>
+		<span class="r-grow"></span>
+		<button class="grp-toggle" onclick={() => toggleGroup(key)} aria-label="toggle">
+			<span class="chev" class:closed={collapsed.has(key)}>
+				<Icon name="chevron-down" size={14} />
+			</span>
+		</button>
+	</div>
+{/snippet}
 
 {#snippet nodeRow(n: FleetOverviewNode)}
 	{@const mism =
@@ -917,9 +1003,17 @@
 		font-size: 0.78rem;
 		font-weight: 700;
 	}
-	.grp-sub {
-		font-size: 0.66rem;
-		color: var(--text-faint);
+	/* tree levels: region boldest, country medium, city lightest */
+	.lvl-region > .grp-head .grp-city {
+		font-size: 0.82rem;
+	}
+	.lvl-country > .grp-head .grp-city {
+		font-size: 0.76rem;
+	}
+	.lvl-city > .grp-head .grp-city {
+		font-size: 0.72rem;
+		font-weight: 600;
+		color: var(--text-dim);
 	}
 	.grp-count {
 		font-size: 0.68rem;
@@ -1176,12 +1270,29 @@
 		pointer-events: none;
 		z-index: 5;
 		font-size: 0.72rem;
+		gap: 3px;
 	}
-	.edge-tip .et-row .mono {
+	.edge-tip .et-head {
+		font-weight: 700;
+		opacity: 0.75;
+		font-size: 0.66rem;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+	}
+	.edge-tip .et-link {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+	}
+	.edge-tip .et-ep .mono {
 		font-weight: 700;
 	}
 	.edge-tip .et-cost {
 		opacity: 0.7;
+		font-size: 0.66rem;
+	}
+	.edge-tip .et-more {
+		opacity: 0.6;
 		font-size: 0.66rem;
 	}
 
