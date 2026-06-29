@@ -9,6 +9,7 @@
 	import { t } from '$lib/i18n.svelte';
 	import { relTime } from '$lib/format';
 	import type { NodeHealthValue, FleetLink, FleetOverviewNode } from '$lib/types';
+	import { resolveGeo, type ResolvedGeo } from '$lib/geo';
 	import Icon, { type IconName } from '$lib/components/Icon.svelte';
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import Tooltip from '$lib/components/Tooltip.svelte';
@@ -29,22 +30,14 @@
 	// Worst-health ranking for a cluster's combined dot colour (higher = worse).
 	const SEV: Record<NodeHealthValue, number> = { down: 4, degraded: 3, stale: 2, unknown: 1, ok: 0 };
 
-	// Region prefix → [lat, lon, city]. Covers the current fleet; unknowns fall to 0,0.
-	const GEO: Record<string, [number, number, string]> = {
-		hkg: [22.32, 114.17, 'Hong Kong'],
-		can: [23.13, 113.26, 'Guangzhou'],
-		pvg: [31.23, 121.47, 'Shanghai'],
-		sha: [31.23, 121.47, 'Shanghai'],
-		tpe: [25.03, 121.57, 'Taipei'],
-		tyo: [35.68, 139.77, 'Tokyo'],
-		nrt: [35.77, 140.39, 'Tokyo'],
-		lax: [34.05, -118.24, 'Los Angeles'],
-		sjc: [37.34, -121.89, 'San Jose'],
-		fra: [50.11, 8.68, 'Frankfurt'],
-		ams: [52.37, 4.9, 'Amsterdam'],
-		sin: [1.35, 103.82, 'Singapore'],
-		lon: [51.51, -0.13, 'London']
-	};
+	// A node's location comes from its `site` (city code) resolved against the geo
+	// registry → coords + country + DN42 region; the node's own `region` field wins
+	// when set. Unknown sites fall back to the region centre, or are left unlocated.
+	let geoOf = $derived.by(() => {
+		const m = new Map<string, ResolvedGeo>();
+		for (const n of nodes) m.set(n.node_id, resolveGeo(n.site, n.region));
+		return m;
+	});
 
 	const W = 1000;
 	const H = 500;
@@ -56,8 +49,13 @@
 	const CX0 = 535;
 	const CY0 = 162;
 	const MAX_K = 16;
-	// Zoom at/above which same-region clusters split into individual fanned nodes.
-	const SPLIT_K = 4;
+	// Zoom thresholds for the region → country → city → node hierarchy: below COUNTRY_K
+	// markers cluster by DN42 region, then by country, then by city; at/above SPLIT_K a
+	// city's co-located nodes fan out into individual markers.
+	const COUNTRY_K = 1.8;
+	const CITY_K = 3;
+	const SPLIT_K = 5;
+	type Level = 'region' | 'country' | 'city';
 
 	let k = $state(1);
 	let cx = $state(CX0);
@@ -71,6 +69,8 @@
 	let vx = $derived(cx - vw / 2);
 	let vy = $derived(cy - vh / 2);
 	let expanded = $derived(k >= SPLIT_K);
+	// Current clustering granularity, driven by zoom.
+	let level = $derived<Level>(k < COUNTRY_K ? 'region' : k < CITY_K ? 'country' : 'city');
 
 	const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 	function clampCenter() {
@@ -87,24 +87,51 @@
 	];
 	const invLon = (x: number) => (x / W) * 360 - 180 + LON0;
 	const invLat = (y: number) => 90 - (y / H) * 180;
-	const region = (id: string) => (id.match(/^[a-z]+/i)?.[0] ?? id).toLowerCase();
 
-	// Group nodes by region; one cluster per region at its city coordinates.
+	// Cluster grouping key + display label for a node at the current granularity.
+	// Nodes with no coordinate (unknown site and region) are left off the map.
+	function clusterKey(g: ResolvedGeo, lvl: Level): string | null {
+		if (!g.coord) return null;
+		if (lvl === 'region') return g.region != null ? `r${g.region}` : `p${g.coord[0]},${g.coord[1]}`;
+		if (lvl === 'country')
+			return g.country != null ? `c${g.country}` : g.region != null ? `r${g.region}` : `p${g.coord[0]},${g.coord[1]}`;
+		return g.site ?? (g.region != null ? `r${g.region}` : `p${g.coord[0]},${g.coord[1]}`);
+	}
+	function clusterLabel(g: ResolvedGeo, lvl: Level): string {
+		if (lvl === 'region') return g.regionName ?? '—';
+		if (lvl === 'country') return g.countryName ?? g.regionName ?? '—';
+		return g.cityName ?? g.regionName ?? '—';
+	}
+
+	// Group located nodes by the current level; position each cluster at the mean of
+	// its members' projected coordinates (so a region/country marker sits at the
+	// centroid of its cities). Unlocated nodes drop out here and surface in the list.
 	let clusters = $derived.by(() => {
-		const m = new Map<string, FleetOverviewNode[]>();
+		const m = new Map<string, { key: string; label: string; group: FleetOverviewNode[] }>();
 		for (const n of nodes) {
-			const r = region(n.node_id);
-			if (!m.has(r)) m.set(r, []);
-			m.get(r)!.push(n);
+			const g = geoOf.get(n.node_id);
+			if (!g) continue;
+			const key = clusterKey(g, level);
+			if (key == null) continue;
+			let c = m.get(key);
+			if (!c) m.set(key, (c = { key, label: clusterLabel(g, level), group: [] }));
+			c.group.push(n);
 		}
-		return [...m].map(([r, group]) => {
-			const geo = GEO[r] ?? [0, 0, r.toUpperCase()];
-			const [x, y] = proj(geo[1], geo[0]);
-			const worst = group.reduce<NodeHealthValue>(
+		return [...m.values()].map((c) => {
+			let sx = 0;
+			let sy = 0;
+			for (const n of c.group) {
+				const [gx, gy] = proj(geoOf.get(n.node_id)!.coord![1], geoOf.get(n.node_id)!.coord![0]);
+				sx += gx;
+				sy += gy;
+			}
+			const x = sx / c.group.length;
+			const y = sy / c.group.length;
+			const worst = c.group.reduce<NodeHealthValue>(
 				(w, n) => (SEV[n.health] > SEV[w] ? n.health : w),
 				'ok'
 			);
-			return { region: r, city: geo[2], group, x, y, worst };
+			return { ...c, x, y, worst };
 		});
 	});
 
@@ -345,18 +372,79 @@
 		return c.group.every((n) => nodeDim(n));
 	}
 
-	// List grouped by region (mirrors the map clusters): worst-health first, then city;
-	// nodes within a group also worst-first. Multi-node groups get a collapsible header.
-	let listGroups = $derived.by(() =>
-		clusters
-			.map((c) => ({
-				...c,
-				nodes: [...c.group].sort(
-					(a, b) => SEV[b.health] - SEV[a.health] || a.node_id.localeCompare(b.node_id)
-				)
-			}))
-			.sort((a, b) => SEV[b.worst] - SEV[a.worst] || a.city.localeCompare(b.city))
-	);
+	// Node list grouped by CITY (stable regardless of map zoom level): worst-health
+	// first, then region → city; nodes within a group also worst-first. Nodes with no
+	// known location go to a trailing "unlocated" group so they stay visible.
+	let listGroups = $derived.by(() => {
+		type Grp = {
+			key: string;
+			label: string;
+			sub: string | null;
+			region: number;
+			nodes: FleetOverviewNode[];
+		};
+		const m = new Map<string, Grp>();
+		const unlocated: FleetOverviewNode[] = [];
+		for (const n of nodes) {
+			const g = geoOf.get(n.node_id);
+			if (!g || !g.coord) {
+				unlocated.push(n);
+				continue;
+			}
+			const key = g.site ?? (g.region != null ? `r${g.region}` : `p${g.coord[0]},${g.coord[1]}`);
+			let grp = m.get(key);
+			if (!grp)
+				m.set(
+					key,
+					(grp = {
+						key,
+						label: g.cityName ?? g.regionName ?? '—',
+						sub: g.countryName ?? g.regionName ?? null,
+						region: g.region ?? 999,
+						nodes: []
+					})
+				);
+			grp.nodes.push(n);
+		}
+		const byWorst = (a: FleetOverviewNode, b: FleetOverviewNode) =>
+			SEV[b.health] - SEV[a.health] || a.node_id.localeCompare(b.node_id);
+		const worstOf = (ns: FleetOverviewNode[]) =>
+			ns.reduce<NodeHealthValue>((w, n) => (SEV[n.health] > SEV[w] ? n.health : w), 'ok');
+		const centroid = (ns: FleetOverviewNode[]): [number, number] => {
+			let sx = 0;
+			let sy = 0;
+			let nLoc = 0;
+			for (const n of ns) {
+				const g = geoOf.get(n.node_id);
+				if (!g?.coord) continue;
+				const [x, y] = proj(g.coord[1], g.coord[0]);
+				sx += x;
+				sy += y;
+				nLoc++;
+			}
+			return nLoc ? [sx / nLoc, sy / nLoc] : [CX0, CY0];
+		};
+		const groups = [...m.values()]
+			.map((grp) => {
+				const [x, y] = centroid(grp.nodes);
+				return { ...grp, x, y, nodes: [...grp.nodes].sort(byWorst), worst: worstOf(grp.nodes) };
+			})
+			.sort(
+				(a, b) => SEV[b.worst] - SEV[a.worst] || a.region - b.region || a.label.localeCompare(b.label)
+			);
+		if (unlocated.length)
+			groups.push({
+				key: '__unlocated',
+				label: t('topo.unlocated'),
+				sub: null,
+				region: 1000,
+				x: CX0,
+				y: CY0,
+				nodes: [...unlocated].sort(byWorst),
+				worst: worstOf(unlocated)
+			});
+		return groups;
+	});
 	let collapsed = $state(new Set<string>());
 	function toggleGroup(r: string) {
 		const s = new Set(collapsed);
@@ -365,8 +453,13 @@
 		collapsed = s;
 	}
 	let linkCount = $derived(edges.length);
+	// distinct DN42 regions present across the fleet (zoom-independent summary count).
+	let regionCount = $derived(
+		new Set([...geoOf.values()].map((g) => g.region).filter((r) => r != null)).size
+	);
 	function cityOf(id: string): string {
-		return (GEO[region(id)] ?? [0, 0, region(id).toUpperCase()])[2];
+		const g = geoOf.get(id);
+		return g?.cityName ?? g?.regionName ?? '—';
 	}
 
 	const CAP_META: Record<string, { icon: IconName; label: string }> = {
@@ -417,7 +510,7 @@
 		<div class="sum-stats">
 			<span class="sum-item"><strong>{nodes.length}</strong> {t('topo.sumNodes')}</span>
 			<span class="sum-sep">·</span>
-			<span class="sum-item"><strong>{clusters.length}</strong> {t('topo.sumRegions')}</span>
+			<span class="sum-item"><strong>{regionCount}</strong> {t('topo.sumRegions')}</span>
 			<span class="sum-sep">·</span>
 			<span class="sum-item"><strong>{linkCount}</strong> {t('topo.sumLinks')}</span>
 		</div>
@@ -492,7 +585,7 @@
 
 			<!-- markers: collapsed clusters, or individual nodes when zoomed in -->
 			{#if !expanded}
-				{#each clusters as c (c.region)}
+				{#each clusters as c (c.key)}
 					{#if c.group.length > 1}
 						<button
 							class="cluster"
@@ -502,10 +595,10 @@
 							onpointerdown={(e) => e.stopPropagation()}
 							onpointerenter={() => (hovered = c.group[0].node_id)}
 							onpointerleave={() => (hovered = null)}
-							title="{c.city} · {c.group.length}"
+							title="{c.label} · {c.group.length}"
 						>
 							<span class="c-dot" style="background:{COLOR[c.worst]}">{c.group.length}</span>
-							<span class="c-label">{c.city} <span class="c-plus">+{c.group.length - 1}</span></span>
+							<span class="c-label">{c.label} <span class="c-plus">+{c.group.length - 1}</span></span>
 						</button>
 					{:else}
 						{@const n = c.group[0]}
@@ -587,9 +680,9 @@
 		</div>
 	</div>
 
-	<!-- ===== node list (grouped by region) ===== -->
+	<!-- ===== node list (grouped by city) ===== -->
 		<div class="list">
-			{#each listGroups as g (g.region)}
+			{#each listGroups as g (g.key)}
 				{#if g.nodes.length > 1}
 					<div class="grp">
 						<div class="grp-head">
@@ -603,19 +696,20 @@
 										onpointerleave={() => (hovered = null)}
 									>
 										<span class="grp-dot" style="background:{COLOR[g.worst]}"></span>
-										<span class="grp-city">{g.city}</span>
+										<span class="grp-city">{g.label}</span>
+										{#if g.sub}<span class="grp-sub">{g.sub}</span>{/if}
 										<span class="grp-count">{g.nodes.length}</span>
 									</button>
 								{/snippet}
 							</Tooltip>
 							<span class="r-grow"></span>
-							<button class="grp-toggle" onclick={() => toggleGroup(g.region)} aria-label="toggle">
-								<span class="chev" class:closed={collapsed.has(g.region)}>
+							<button class="grp-toggle" onclick={() => toggleGroup(g.key)} aria-label="toggle">
+								<span class="chev" class:closed={collapsed.has(g.key)}>
 									<Icon name="chevron-down" size={14} />
 								</span>
 							</button>
 						</div>
-						{#if !collapsed.has(g.region)}
+						{#if !collapsed.has(g.key)}
 							<div class="grp-body">
 								{#each g.nodes as n (n.node_id)}{@render nodeRow(n)}{/each}
 							</div>
@@ -822,6 +916,10 @@
 	.grp-city {
 		font-size: 0.78rem;
 		font-weight: 700;
+	}
+	.grp-sub {
+		font-size: 0.66rem;
+		color: var(--text-faint);
 	}
 	.grp-count {
 		font-size: 0.68rem;

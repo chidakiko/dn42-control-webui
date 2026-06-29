@@ -63,6 +63,12 @@ export interface FleetHealth {
 // links, in one call (replaces N per-node internal-topology fetches).
 export interface FleetOverviewNode extends NodeHealthRow {
 	capabilities: string[];
+	// Node identity bits for map placement: `site` is the city/datacenter code
+	// (resolved against the geo registry → coords + country), `region` is the
+	// DN42 standard origin-region community (41..57). Both null until the node
+	// has a DesiredState.
+	site: string | null;
+	region: number | null;
 }
 export interface FleetLink {
 	a: string;
