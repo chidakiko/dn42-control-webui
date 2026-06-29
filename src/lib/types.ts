@@ -61,7 +61,16 @@ export interface FleetHealth {
 
 // Aggregate dashboard payload: health rows (+ capabilities) + the physical WG mesh
 // links, in one call (replaces N per-node internal-topology fetches).
-export interface FleetOverviewNode extends NodeHealthRow {
+// Agent liveness + version, folded into the /ui overview rows from the
+// heartbeat-fed registry. All null for agents never heard from (or after a
+// control-server restart, until the next heartbeat ~30s later).
+export interface AgentLivenessFields {
+	agent_version: string | null;
+	last_heartbeat_at: string | null; // ISO 8601
+	agent_up_to_date: boolean | null; // null = no global target set, or never seen
+}
+
+export interface FleetOverviewNode extends NodeHealthRow, AgentLivenessFields {
 	capabilities: string[];
 	// Node identity bits for map placement: `site` is the city/datacenter code
 	// (resolved against the geo registry → coords + country), `region` is the
@@ -79,6 +88,7 @@ export interface FleetLink {
 }
 export interface FleetOverview {
 	summary: Partial<Record<NodeHealthValue, number>>;
+	agent_target_version: string | null;
 	nodes: FleetOverviewNode[];
 	links: FleetLink[];
 }
@@ -223,12 +233,13 @@ export interface NodeBgpSessions {
 
 // One-shot node page payload — health row + everything the overview/status columns
 // need, so the page fetches once instead of 4× nodeHealth + parsing last_snapshot.
-export interface NodeOverview extends NodeHealthRow {
+export interface NodeOverview extends NodeHealthRow, AgentLivenessFields {
 	capabilities: string[];
 	self_metrics: AgentSelfMetrics | null;
 	drift: DriftItem[];
 	links: LinkStatus[];
 	bgp_sessions: BgpSessionStatus[];
+	agent_target_version: string | null;
 }
 
 export interface GenerationOut {

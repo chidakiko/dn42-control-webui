@@ -7,7 +7,7 @@
 	import { api, ApiError, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
 	import { t } from '$lib/i18n.svelte';
-	import { relTime } from '$lib/format';
+	import { relTime, agentLiveness } from '$lib/format';
 	import type { NodeHealthValue, FleetLink, FleetOverviewNode } from '$lib/types';
 	import { resolveGeo, type ResolvedGeo } from '$lib/geo';
 	import Icon, { type IconName } from '$lib/components/Icon.svelte';
@@ -813,6 +813,7 @@
 		n.desired_generation != null &&
 		n.observed_generation !== n.desired_generation}
 	{@const deg = degree.get(n.node_id) ?? 0}
+	{@const lv = n.last_heartbeat_at ? agentLiveness(n.last_heartbeat_at) : null}
 	<a
 		href="/nodes/{n.node_id}"
 		class="row"
@@ -824,6 +825,7 @@
 	>
 		<div class="r-main">
 			<div class="r-head">
+				{#if lv}<span class="live-dot {lv}" title={t('live.' + lv)}></span>{/if}
 				<span class="r-id mono">{n.node_id}</span>
 				<span class="r-city">{cityOf(n.node_id)}</span>
 				{#each caps(n) as c (c.label)}
@@ -856,6 +858,11 @@
 							<span {...props} class="chip-drift">{n.drift_count} drift</span>
 						{/snippet}
 					</Tooltip>
+				{/if}
+				{#if n.agent_version}
+					<span class="m-item m-ver" class:behind={n.agent_up_to_date === false}>
+						<Icon name="monitor" size={10} />{n.agent_version}
+					</span>
 				{/if}
 				<span class="r-grow"></span>
 				<span class="m-when {freshness(n.last_snapshot_at)}">{relTime(n.last_snapshot_at)}</span>
@@ -1375,6 +1382,25 @@
 		align-items: center;
 		gap: 0.2rem;
 		font-variant-numeric: tabular-nums;
+	}
+	.live-dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		flex: none;
+		background: var(--c-unknown);
+	}
+	.live-dot.online {
+		background: var(--c-ok);
+	}
+	.live-dot.stale {
+		background: var(--c-warn);
+	}
+	.live-dot.offline {
+		background: var(--c-down);
+	}
+	.m-ver.behind {
+		color: var(--c-warn);
 	}
 	.m-stale {
 		color: var(--c-warn);

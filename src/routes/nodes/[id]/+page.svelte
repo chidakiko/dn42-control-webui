@@ -4,7 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { api, ApiError, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
-	import { fmtTime } from '$lib/format';
+	import { fmtTime, relTime, agentLiveness } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import { autoRefresh } from '$lib/refresh.svelte';
 	import type { NodeOut, PeeringOut, NodeHealthValue, NodeOverview, BgpSessionStatus } from '$lib/types';
@@ -44,11 +44,30 @@
 	let showWizard = $state(false);
 
 	// "Disconnected" = the control center hasn't heard from the node recently.
-	// stale = warning, down = error. Real-time push is unavailable in both.
-	let disconnected = $derived(health === 'stale' || health === 'down');
-	let severity = $derived<'down' | 'stale' | null>(
-		health === 'down' ? 'down' : health === 'stale' ? 'stale' : null
+	// Heartbeat is the primary signal (the agent beats every ~30s over WS); we fall
+	// back to report-derived health only when the node has never sent a heartbeat
+	// (old agent / pre-heartbeat). stale = warning, down = error; real-time push is
+	// unavailable in both.
+	let liveness = $derived(
+		overview?.last_heartbeat_at ? agentLiveness(overview.last_heartbeat_at) : null
 	);
+	let disconnected = $derived(
+		liveness ? liveness !== 'online' : health === 'stale' || health === 'down'
+	);
+	let severity = $derived<'down' | 'stale' | null>(
+		liveness
+			? liveness === 'offline'
+				? 'down'
+				: liveness === 'stale'
+					? 'stale'
+					: null
+			: health === 'down'
+				? 'down'
+				: health === 'stale'
+					? 'stale'
+					: null
+	);
+	const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'down' } as const;
 
 	// Two-level navigation: 5 top-level groups, each with sub-tabs. The content
 	// selector (`tab`) stays flat (the 12 content ids); the group is derived from
@@ -383,6 +402,23 @@
 	</div>
 	{#if node}
 		<div class="ph-actions">
+			{#if liveness}
+				<span class="badge {LIVE_CLS[liveness]}" title="{t('arel.col.seen')}: {fmtTime(overview?.last_heartbeat_at)}">
+					<span class="dot"></span>{t('live.' + liveness)} · {relTime(overview?.last_heartbeat_at)}
+				</span>
+			{/if}
+			{#if overview?.agent_version}
+				<a
+					class="ver-chip"
+					class:behind={overview.agent_up_to_date === false}
+					href="/agent-releases"
+					title={overview.agent_up_to_date === false && overview.agent_target_version
+						? `${t('arel.behind')} → ${overview.agent_target_version}`
+						: t('arel.col.version')}
+				>
+					<Icon name="monitor" size={11} />{overview.agent_version}
+				</a>
+			{/if}
 			{#if health}<HealthBadge value={health} />{/if}
 			<span class="badge {node.lifecycle === 'active' ? 'ok' : 'stale'}">
 				<span class="dot"></span>{node.lifecycle}
@@ -592,6 +628,27 @@
 {/if}
 
 <style>
+	.ver-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		padding: 0.12rem 0.5rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		font-size: 0.78rem;
+		font-family: var(--font-mono, monospace);
+		color: var(--text-dim);
+		white-space: nowrap;
+	}
+	.ver-chip:hover {
+		text-decoration: none;
+		border-color: var(--text-faint);
+	}
+	.ver-chip.behind {
+		color: var(--c-warn);
+		border-color: color-mix(in srgb, var(--c-warn) 45%, transparent);
+		background: color-mix(in srgb, var(--c-warn) 12%, transparent);
+	}
 	.disc {
 		display: flex;
 		gap: 0.75rem;

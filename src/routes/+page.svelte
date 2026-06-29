@@ -8,7 +8,7 @@
 		PeeringIssue
 	} from '$lib/types';
 	import FleetRouting from '$lib/components/FleetRouting.svelte';
-	import { fmtBytes } from '$lib/format';
+	import { fmtBytes, agentLiveness } from '$lib/format';
 	import { autoRefresh } from '$lib/refresh.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/Icon.svelte';
@@ -114,6 +114,15 @@
 
 	let total = $derived(data ? data.nodes.length : 0);
 	let okCount = $derived(data ? (data.summary.ok ?? 0) : 0);
+	// Heartbeat presence (primary liveness) + version compliance, both aggregated
+	// client-side from the fleet overview rows.
+	let onlineCount = $derived(
+		data ? data.nodes.filter((n) => agentLiveness(n.last_heartbeat_at) === 'online').length : 0
+	);
+	let behindCount = $derived(
+		data ? data.nodes.filter((n) => n.agent_up_to_date === false).length : 0
+	);
+	let targetVer = $derived(data?.agent_target_version ?? null);
 </script>
 
 {#if error}
@@ -134,7 +143,20 @@
 			<p class="ph-sub">{t('dash.topologySub')}</p>
 		</div>
 		{#if data}
-			<span class="kpi"><strong>{okCount}/{total}</strong> {t('health.ok')}</span>
+			<div class="kpis">
+				<span class="kpi"><strong>{okCount}/{total}</strong> {t('health.ok')}</span>
+				<span class="kpi"><strong>{onlineCount}/{total}</strong> {t('live.online')}</span>
+				{#if targetVer}
+					<a class="kpi ver-kpi" href="/agent-releases" class:warn={behindCount > 0}>
+						<span class="mono">{targetVer}</span>
+						{#if behindCount > 0}
+							· <strong class="bad-num">{behindCount}</strong> {t('arel.behind')}
+						{:else}
+							· {t('arel.uptodate')}
+						{/if}
+					</a>
+				{/if}
+			</div>
 		{:else}
 			<Skeleton w="64px" h="1.05rem" />
 		{/if}
@@ -276,12 +298,43 @@
 {/if}
 
 <style>
+	.kpis {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.4rem 1.1rem;
+		justify-content: flex-end;
+	}
 	.kpi {
 		font-size: 0.85rem;
 		color: var(--text-dim);
 	}
 	.kpi .bad-num {
 		color: var(--c-bad);
+	}
+	.ver-kpi {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		color: var(--text-dim);
+		padding: 0.1rem 0.55rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+	}
+	.ver-kpi:hover {
+		text-decoration: none;
+		border-color: var(--text-faint);
+	}
+	.ver-kpi.warn {
+		color: var(--c-warn);
+		border-color: color-mix(in srgb, var(--c-warn) 45%, transparent);
+	}
+	.ver-kpi .mono {
+		color: var(--text);
+		font-weight: 600;
+	}
+	.ver-kpi.warn .mono {
+		color: var(--c-warn);
 	}
 	/* peering issues list */
 	.pi-ok {

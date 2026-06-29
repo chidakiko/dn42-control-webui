@@ -2,9 +2,9 @@
 	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { autoRefresh } from '$lib/refresh.svelte';
-	import type { NodeIn, NodeOut } from '$lib/types';
+	import type { NodeIn, NodeOut, AgentLivenessFields } from '$lib/types';
 	import { toast } from '$lib/toast.svelte';
-	import { fmtTime } from '$lib/format';
+	import { fmtTime, agentLiveness } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import JsonEditor from '$lib/components/JsonEditor.svelte';
@@ -15,6 +15,12 @@
 	let nodes = $state<NodeOut[]>([]);
 	let loading = $state(true);
 	let error = $state('');
+
+	// Agent liveness/version isn't on NodeOut — join it from the fleet overview
+	// (one call for the whole fleet), keyed by node_id. Best-effort: the list still
+	// renders if the overview fetch fails.
+	const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'down' } as const;
+	let liveBy = $state<Record<string, AgentLivenessFields>>({});
 
 	let showCreate = $state(false);
 	let saving = $state(false);
@@ -43,6 +49,21 @@
 			error = errorMessage(err);
 		} finally {
 			loading = false;
+		}
+		try {
+			const ov = await api.fleetOverview();
+			liveBy = Object.fromEntries(
+				ov.nodes.map((n) => [
+					n.node_id,
+					{
+						agent_version: n.agent_version,
+						last_heartbeat_at: n.last_heartbeat_at,
+						agent_up_to_date: n.agent_up_to_date
+					}
+				])
+			);
+		} catch {
+			/* liveness is a best-effort overlay */
 		}
 	}
 	$effect(() => {
@@ -136,6 +157,7 @@
 					<th>{t('nodes.col.routerId')}</th>
 					<th>{t('nodes.col.site')}</th>
 					<th>{t('nodes.col.lifecycle')}</th>
+					<th>{t('arel.col.version')}</th>
 					<th>{t('nodes.col.gen')}</th>
 					<th>{t('nodes.col.updated')}</th>
 				</tr>
@@ -149,14 +171,22 @@
 							<td><Skeleton w="5.5rem" h="0.85rem" /></td>
 							<td><Skeleton w="2.5rem" h="0.85rem" /></td>
 							<td><Skeleton w="4.5rem" h="1.2rem" radius="999px" /></td>
+							<td><Skeleton w="4rem" h="0.85rem" /></td>
 							<td><Skeleton w="1.2rem" h="0.85rem" /></td>
 							<td><Skeleton w="6rem" h="0.8rem" /></td>
 						</tr>
 					{/each}
 				{:else}
 					{#each nodes as n (n.node_id)}
+						{@const live = liveBy[n.node_id]}
+						{@const ls = live ? agentLiveness(live.last_heartbeat_at) : null}
 						<tr>
-							<td><a href="/nodes/{n.node_id}" class="mono">{n.node_id}</a></td>
+							<td>
+								<a href="/nodes/{n.node_id}" class="id-cell mono">
+									{#if ls}<span class="live-dot {LIVE_CLS[ls]}" title={t('live.' + ls)}></span>{/if}
+									{n.node_id}
+								</a>
+							</td>
 							<td class="mono">{n.asn}</td>
 							<td class="mono">{n.router_id}</td>
 							<td>{n.site ?? '—'}</td>
@@ -164,6 +194,9 @@
 								<span class="badge {n.lifecycle === 'active' ? 'ok' : 'stale'}">
 									<span class="dot"></span>{n.lifecycle}
 								</span>
+							</td>
+							<td class="mono faint" class:behind={live?.agent_up_to_date === false}>
+								{live?.agent_version ?? '—'}
 							</td>
 							<td class="mono">{n.current_generation}</td>
 							<td class="faint">{fmtTime(n.updated_at)}</td>
@@ -208,3 +241,30 @@
 		</button>
 	{/snippet}
 </Modal>
+
+<style>
+	.id-cell {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+	}
+	.live-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		flex: none;
+		background: var(--c-unknown);
+	}
+	.live-dot.ok {
+		background: var(--c-ok);
+	}
+	.live-dot.stale {
+		background: var(--c-warn);
+	}
+	.live-dot.down {
+		background: var(--c-down);
+	}
+	td.behind {
+		color: var(--c-warn);
+	}
+</style>

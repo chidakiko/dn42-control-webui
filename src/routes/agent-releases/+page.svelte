@@ -77,7 +77,7 @@
 		}
 	}
 
-	const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'unknown' } as const;
+	const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'down' } as const;
 	let versionOpts = $derived((data?.versions ?? []).map((v) => ({ value: v, label: v })));
 </script>
 
