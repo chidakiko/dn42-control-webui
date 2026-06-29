@@ -7,8 +7,10 @@
 import { goto } from '$app/navigation';
 import { auth } from './auth.svelte';
 import type {
+	AgentReleaseManifest,
 	AgentTokenOut,
 	AuditEntry,
+	ReleasesStatus,
 	DnsGroupOut,
 	DnsGroupZoneOut,
 	DnsRecordOut,
@@ -84,14 +86,17 @@ async function request<T>(
 ): Promise<T> {
 	const headers: Record<string, string> = {};
 	if (auth.token) headers['Authorization'] = `Bearer ${auth.token}`;
-	if (body !== undefined) headers['Content-Type'] = 'application/json';
+	// FormData sets its own multipart Content-Type (with boundary); only JSON-encode
+	// plain bodies.
+	const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
+	if (body !== undefined && !isForm) headers['Content-Type'] = 'application/json';
 
 	let res: Response;
 	try {
 		res = await fetch(`${auth.apiBase}${path}`, {
 			method,
 			headers,
-			body: body === undefined ? undefined : JSON.stringify(body)
+			body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body)
 		});
 	} catch {
 		throw new ApiError(
@@ -351,6 +356,17 @@ export const api = {
 		request<Registration>('POST', `/api/v1/admin/registrations/${rid}/reject`, {
 			note
 		}),
+
+	// --- Agent releases / self-update (global target version) ---
+	agentReleases: () => request<ReleasesStatus>('GET', '/api/v1/admin/agent-releases'),
+	setAgentTarget: (version: string) =>
+		request<ReleasesStatus>('POST', '/api/v1/admin/agent-releases/target', { version }),
+	uploadAgentRelease: (version: string, files: File[]) => {
+		const fd = new FormData();
+		fd.append('version', version);
+		for (const f of files) fd.append('files', f, f.name);
+		return request<AgentReleaseManifest>('POST', '/api/v1/admin/agent-releases', fd);
+	},
 
 	// --- Provision + audit ---
 	provision: (body: unknown) =>

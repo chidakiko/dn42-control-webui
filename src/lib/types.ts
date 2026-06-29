@@ -582,3 +582,34 @@ export interface ProvisionOut {
 	subscribers: number;
 	delivered: number;
 }
+
+// --- Agent releases / self-update (global target version model) ---
+// Source: control-server app/api/v1/admin/agent_releases.py. Liveness + version
+// come from the WS-heartbeat-fed in-memory AgentLivenessRegistry, so `nodes`
+// only lists agents heard from since the control server last started.
+
+export interface NodeVersionOut {
+	node_id: string;
+	agent_version: string;
+	applied_generation: number | null;
+	apply_status: string | null;
+	last_seen: string; // ISO 8601 — when control received the last heartbeat
+	up_to_date: boolean; // agent_version === target
+}
+
+export interface ReleasesStatus {
+	target: string | null; // global target version (null until set)
+	versions: string[]; // uploaded release versions
+	nodes: NodeVersionOut[];
+}
+
+export interface AgentWheel {
+	filename: string;
+	sha256: string;
+	size: number;
+}
+
+export interface AgentReleaseManifest {
+	version: string;
+	wheels: AgentWheel[];
+}

@@ -25,6 +25,7 @@
 		{ href: '/enrollment-tokens', key: 'nav.enrollment', icon: 'tokens' },
 		{ href: '/provision', key: 'nav.provision', icon: 'provision' },
 		{ href: '/dns-groups', key: 'nav.dnsGroups', icon: 'dns' },
+		{ href: '/agent-releases', key: 'nav.agentReleases', icon: 'monitor' },
 		{ href: '/audit', key: 'nav.audit', icon: 'audit' }
 	];
 
@@ -43,6 +44,7 @@
 		'/enrollment-tokens': 'enr.title',
 		'/provision': 'prov.title',
 		'/dns-groups': 'dns.title',
+		'/agent-releases': 'arel.title',
 		'/audit': 'audit.title'
 	};
 	// Breadcrumb trail for the top bar. Multi-level routes (node detail) get a
@@ -67,6 +69,7 @@
 		'/enrollment-tokens': 'enr.note',
 		'/provision': 'prov.note',
 		'/dns-groups': 'dns.subtitle',
+		'/agent-releases': 'arel.note',
 		'/audit': 'audit.subtitle'
 	};
 	let pageDesc = $derived.by(() => {
