@@ -421,12 +421,19 @@
 		first: string;
 		nodes: FleetOverviewNode[];
 	};
-	type CountryLvl = Omit<CityLvl, 'nodes'> & { count: number; cities: CityLvl[] };
+	// `flat` city-states carry their nodes directly (no city sublevel); regular
+	// countries carry city subgroups instead.
+	type CountryLvl = Omit<CityLvl, 'nodes'> & {
+		count: number;
+		flat: boolean;
+		cities: CityLvl[];
+		nodes?: FleetOverviewNode[];
+	};
 	type RegionLvl = Omit<CityLvl, 'nodes'> & { region: number; count: number; countries: CountryLvl[] };
 
 	let listTree = $derived.by(() => {
 		type YAcc = { key: string; label: string; nodes: FleetOverviewNode[] };
-		type CAcc = { key: string; label: string; cities: Map<string, YAcc> };
+		type CAcc = { key: string; label: string; flat: boolean; cities: Map<string, YAcc> };
 		type RAcc = { key: string; label: string; region: number; countries: Map<string, CAcc> };
 		const racc = new Map<string, RAcc>();
 		const unlocated: FleetOverviewNode[] = [];
@@ -442,7 +449,7 @@
 			if (!r) racc.set(rkey, (r = { key: rkey, label: g.regionName ?? '—', region: rnum, countries: new Map() }));
 			const ckey = `C:${rnum}:${g.country ?? 0}`;
 			let c = r.countries.get(ckey);
-			if (!c) r.countries.set(ckey, (c = { key: ckey, label: g.countryName ?? g.regionName ?? '—', cities: new Map() }));
+			if (!c) r.countries.set(ckey, (c = { key: ckey, label: g.countryName ?? g.regionName ?? '—', flat: g.countrySingleCity, cities: new Map() }));
 			const ykey = `Y:${g.site ?? `r${rnum}`}`;
 			let y = c.cities.get(ykey);
 			if (!y) c.cities.set(ykey, (y = { key: ykey, label: g.cityName ?? g.regionName ?? '—', nodes: [] }));
@@ -459,7 +466,12 @@
 			const cities = [...c.cities.values()].map(buildCity).sort(byWorstLvl);
 			const ns = cities.flatMap((y) => y.nodes);
 			const [x, y] = centroidOf(ns);
-			return { key: c.key, label: c.label, worst: worstOf(ns), x, y, first: ns[0].node_id, count: ns.length, cities };
+			const base = { key: c.key, label: c.label, worst: worstOf(ns), x, y, first: ns[0].node_id, count: ns.length };
+			// Single-city area (e.g. a SAR): hang the nodes straight off the country,
+			// skipping the redundant city level ("Hong Kong (SAR)" → nodes, not → "Hong Kong" → nodes).
+			return c.flat
+				? { ...base, flat: true, cities: [], nodes: [...ns].sort(byWorst) }
+				: { ...base, flat: false, cities };
 		};
 		const buildRegion = (r: RAcc): RegionLvl => {
 			const countries = [...r.countries.values()].map(buildCountry).sort(byWorstLvl);
@@ -731,16 +743,20 @@
 									{@render head(c.label, c.worst, c.count, c.key, c.x, c.y, 3.8, c.first)}
 									{#if !collapsed.has(c.key)}
 										<div class="grp-body">
-											{#each c.cities as y (y.key)}
-												<div class="grp lvl-city">
-													{@render head(y.label, y.worst, y.nodes.length, y.key, y.x, y.y, SPLIT_K, y.first)}
-													{#if !collapsed.has(y.key)}
-														<div class="grp-body">
-															{#each y.nodes as n (n.node_id)}{@render nodeRow(n)}{/each}
-														</div>
-													{/if}
-												</div>
-											{/each}
+											{#if c.flat}
+												{#each c.nodes ?? [] as n (n.node_id)}{@render nodeRow(n)}{/each}
+											{:else}
+												{#each c.cities as y (y.key)}
+													<div class="grp lvl-city">
+														{@render head(y.label, y.worst, y.nodes.length, y.key, y.x, y.y, SPLIT_K, y.first)}
+														{#if !collapsed.has(y.key)}
+															<div class="grp-body">
+																{#each y.nodes as n (n.node_id)}{@render nodeRow(n)}{/each}
+															</div>
+														{/if}
+													</div>
+												{/each}
+											{/if}
 										</div>
 									{/if}
 								</div>

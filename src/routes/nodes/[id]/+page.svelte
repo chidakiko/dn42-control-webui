@@ -5,6 +5,7 @@
 	import { api, ApiError, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
 	import { fmtTime, relTime, agentLiveness } from '$lib/format';
+	import { resolveGeo } from '$lib/geo';
 	import { t } from '$lib/i18n.svelte';
 	import { autoRefresh } from '$lib/refresh.svelte';
 	import type { NodeOut, PeeringOut, NodeHealthValue, NodeOverview, BgpSessionStatus } from '$lib/types';
@@ -42,6 +43,14 @@
 	let overview = $state<NodeOverview | null>(null);
 	let health = $derived<NodeHealthValue | null>(overview?.health ?? null);
 	let showWizard = $state(false);
+
+	// Human-readable location for the header: resolve the cryptic `site` code into a
+	// city name (falling back to the country/area, then DN42 region, then raw code).
+	let locationName = $derived.by(() => {
+		if (!node?.site) return node?.site ?? '—';
+		const g = resolveGeo(node.site);
+		return g.cityName ?? g.countryName ?? g.regionName ?? node.site;
+	});
 
 	// "Disconnected" = the control center hasn't heard from the node recently.
 	// Heartbeat is the primary signal (the agent beats every ~30s over WS); we fall
@@ -392,12 +401,31 @@
 	];
 </script>
 
+<div class="node-detail">
 <div class="page-head" style="margin-bottom:1rem">
-	<div>
+	<div class="head-main">
 		{#if node}
-			<p class="ph-sub mono">
-				{node.site ?? '—'} · AS{node.asn} · {t('node.genShort')} {node.current_generation}
+			<p class="ph-sub">
+				<span>{locationName}</span> · <span class="mono">AS{node.asn}</span> ·
+				<span class="mono">{t('node.genShort')} {node.current_generation}</span>
 			</p>
+			<div class="toolbar">
+				<button class="btn primary sm" onclick={() => (showWizard = true)}>
+					<Icon name="route" size={15} />{t('peer.prov.btn')}
+				</button>
+				<button
+					class="btn sm"
+					onclick={() => notify('desired_state_updated')}
+					disabled={disconnected}
+					title={disconnected ? t('disc.pushDisabled') : ''}>{t('node.notifyUpdate')}</button>
+				<button
+					class="btn sm"
+					onclick={() => notify('snapshot_request')}
+					disabled={disconnected}
+					title={disconnected ? t('disc.pushDisabled') : ''}>
+					<Icon name="refresh" size={14} />{t('node.requestSnapshot')}</button>
+				<button class="btn sm" onclick={openEdit}><Icon name="edit" size={14} />{t('common.edit')}</button>
+			</div>
 		{/if}
 	</div>
 	{#if node}
@@ -420,9 +448,12 @@
 				</a>
 			{/if}
 			{#if health}<HealthBadge value={health} />{/if}
-			<span class="badge {node.lifecycle === 'active' ? 'ok' : 'stale'}">
-				<span class="dot"></span>{node.lifecycle}
-			</span>
+			<!-- lifecycle: only surface the noteworthy non-active states (e.g.
+			     decommissioned). "active" is the normal state already implied by the
+			     liveness / health badges, so showing it here is redundant. -->
+			{#if node.lifecycle !== 'active'}
+				<span class="badge stale"><span class="dot"></span>{node.lifecycle}</span>
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -453,17 +484,19 @@
 			</button>
 		{/each}
 	</div>
-	{#if activeGroup.tabs.length}
-		<div class="subtabs">
-			{#each activeGroup.tabs as s (s.id)}
-				<button class="subtab" class:active={tab === s.id} onclick={() => (tab = s.id)}>
-					{t(s.key)}
-				</button>
-			{/each}
-		</div>
-	{/if}
 
-	<div class="card">
+	<div class="detail-body">
+		{#if activeGroup.tabs.length > 1}
+			<nav class="subnav">
+				{#each activeGroup.tabs as s (s.id)}
+					<button class="subnav-item" class:active={tab === s.id} onclick={() => (tab = s.id)}>
+						{t(s.key)}
+					</button>
+				{/each}
+			</nav>
+		{/if}
+
+		<div class="card">
 		{#if tab === 'overview'}
 			<div class="card-head">
 				<h3>{t('node.tab.overview')}</h3>
@@ -496,27 +529,6 @@
 					<div>{#each Object.entries(node.labels) as [k, v] (k)}<span class="tag">{k}={v}</span>{/each}</div>
 				</div>
 			{/if}
-
-			<div class="card-head section-head">
-				<h3 class="muted">{t('node.commonActions')}</h3>
-			</div>
-			<div class="inline">
-				<button class="btn primary sm" onclick={() => (showWizard = true)}>
-					<Icon name="route" size={15} />{t('peer.prov.btn')}
-				</button>
-				<button
-					class="btn sm"
-					onclick={() => notify('desired_state_updated')}
-					disabled={disconnected}
-					title={disconnected ? t('disc.pushDisabled') : ''}>{t('node.notifyUpdate')}</button>
-				<button
-					class="btn sm"
-					onclick={() => notify('snapshot_request')}
-					disabled={disconnected}
-					title={disconnected ? t('disc.pushDisabled') : ''}>
-					<Icon name="refresh" size={14} />{t('node.requestSnapshot')}</button>
-				<button class="btn sm" onclick={openEdit}><Icon name="edit" size={14} />{t('common.edit')}</button>
-			</div>
 
 			<div class="card-head section-head">
 				<h3 class="muted">{t('node.dangerZone')}</h3>
@@ -592,8 +604,10 @@
 		{:else if tab === 'tokens'}
 			<AgentTokensTab {nodeId} />
 		{/if}
+		</div>
 	</div>
 {/if}
+</div>
 
 <Modal title={t('node.edit')} bind:open={showEdit}>
 	<div class="row">
@@ -686,6 +700,24 @@
 		display: flex;
 		align-items: center;
 	}
+	/* header left column: info line + action toolbar share one wrapping row,
+	   so the buttons sit directly after the "city · AS… · gen" info. */
+	.head-main {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem 1rem;
+		flex-wrap: wrap;
+	}
+	.head-main .ph-sub {
+		margin: 0;
+	}
+	/* GCP-style action toolbar, inline right after the node info line */
+	.toolbar {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex-wrap: wrap;
+	}
 	.tabs {
 		display: flex;
 		gap: 2px;
@@ -711,31 +743,77 @@
 		border-bottom-color: var(--accent);
 		font-weight: 500;
 	}
-	/* secondary nav: pill row under the active group's main tab */
-	.subtabs {
+	/* The page fills the content area and hands scrolling to .detail-body: the
+	   info header, action toolbar and tab strip stay pinned while only the tab
+	   content scrolls. (Falls back to normal flow on mobile — see layout.) */
+	.node-detail {
 		display: flex;
-		gap: 0.3rem;
-		flex-wrap: wrap;
-		margin-bottom: 1rem;
+		flex-direction: column;
+		height: 100%;
+		min-height: 0;
 	}
-	.subtab {
+	/* two-column body: left vertical sub-nav + right content card.
+	   When the active group has ≤1 sub-tab the nav is omitted and the card
+	   spans the full width on its own. */
+	.detail-body {
+		display: flex;
+		align-items: flex-start;
+		gap: 1rem;
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+	}
+	.detail-body > .card {
+		flex: 1;
+		min-width: 0;
+	}
+	/* left vertical sub-nav (GCP observability-style) */
+	.subnav {
+		flex: none;
+		width: 180px;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		position: sticky;
+		top: 1rem;
+	}
+	.subnav-item {
 		background: none;
-		border: 1px solid transparent;
-		border-radius: var(--radius-sm);
+		border: none;
+		border-left: 2px solid transparent;
+		border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 		color: var(--text-dim);
-		padding: 0.35rem 0.75rem;
+		text-align: left;
+		padding: 0.5rem 0.85rem;
 		cursor: pointer;
-		font-size: 0.82rem;
-		width: auto;
+		font-size: 0.85rem;
+		width: 100%;
 	}
-	.subtab:hover {
+	.subnav-item:hover {
 		color: var(--text);
 		background: var(--bg-elev-2);
 	}
-	.subtab.active {
+	.subnav-item.active {
 		color: var(--accent);
 		background: var(--accent-soft);
+		border-left-color: var(--accent);
 		font-weight: 500;
+	}
+	@media (max-width: 720px) {
+		.detail-body {
+			flex-direction: column;
+		}
+		.subnav {
+			width: 100%;
+			flex-direction: row;
+			flex-wrap: wrap;
+			position: static;
+		}
+		.subnav-item {
+			width: auto;
+			border-left: none;
+			border-radius: var(--radius-sm);
+		}
 	}
 	/* shared section divider inside the overview (common actions / danger zone) */
 	.section-head {

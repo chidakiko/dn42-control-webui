@@ -34,6 +34,12 @@ export interface CountryInfo {
 	name: string;
 	alpha2: string;
 	region: RegionCode;
+	/**
+	 * The area maps to a single city, so the map/list tree skips the redundant
+	 * city level under it (e.g. don't nest a "Hong Kong" city beneath the
+	 * "Hong Kong (SAR)" country). Used for SARs / single-city territories.
+	 */
+	singleCity?: boolean;
 }
 
 export interface CityInfo {
@@ -73,13 +79,13 @@ export const REGIONS: Record<RegionCode, RegionInfo> = {
 export const COUNTRIES: Record<number, CountryInfo> = {
 	// Asia-East (52)
 	156: { name: 'China Mainland', alpha2: 'CN', region: 52 },
-	344: { name: 'Hong Kong', alpha2: 'HK', region: 52 },
-	446: { name: 'Macao', alpha2: 'MO', region: 52 },
+	344: { name: 'Hong Kong (SAR)', alpha2: 'HK', region: 52, singleCity: true },
+	446: { name: 'Macao (SAR)', alpha2: 'MO', region: 52, singleCity: true },
 	158: { name: 'Taiwan', alpha2: 'TW', region: 52 },
 	392: { name: 'Japan', alpha2: 'JP', region: 52 },
 	410: { name: 'South Korea', alpha2: 'KR', region: 52 },
 	// Asia-Southeast (51)
-	702: { name: 'Singapore', alpha2: 'SG', region: 51 },
+	702: { name: 'Singapore', alpha2: 'SG', region: 51, singleCity: true  },
 	764: { name: 'Thailand', alpha2: 'TH', region: 51 },
 	458: { name: 'Malaysia', alpha2: 'MY', region: 51 },
 	360: { name: 'Indonesia', alpha2: 'ID', region: 51 },
@@ -247,6 +253,8 @@ export interface ResolvedGeo {
 	cityName: string | null;
 	country: number | null;
 	countryName: string | null;
+	/** true when the area maps to a single city (the city level is redundant). */
+	countrySingleCity: boolean;
 	region: RegionCode | null;
 	regionName: string | null;
 	/** placement coordinate [lat, lon], or null when nothing is known. */
@@ -292,6 +300,7 @@ export function resolveGeo(site: string | null | undefined, region?: number | nu
 		cityName: city?.name ?? null,
 		country,
 		countryName: countryInfo?.name ?? null,
+		countrySingleCity: countryInfo?.singleCity ?? false,
 		region: resolvedRegion,
 		regionName: regionInfo?.name ?? null,
 		coord,

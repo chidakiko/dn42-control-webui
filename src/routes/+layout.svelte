@@ -482,6 +482,11 @@
 		min-width: 0; /* let grid child shrink instead of overflowing */
 		display: flex;
 		flex-direction: column;
+		/* bound the content column to the viewport so the scrollbar lives on
+		   .content-inner (and pages can hand scrolling to an inner container)
+		   rather than the whole document. */
+		height: 100vh;
+		min-height: 0;
 	}
 	/* shared top bar: page title (left) + global controls (right); aligns with the
 	   sidebar brand (both 56px) for one continuous header line. */
@@ -578,6 +583,9 @@
 	.content-inner {
 		padding: 1.5rem 2rem;
 		min-width: 0;
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
 	}
 	@media (max-width: 720px) {
 		.shell,
@@ -587,6 +595,15 @@
 		.sidebar {
 			position: static;
 			height: auto;
+		}
+		/* mobile: sidebar stacks above content, so fall back to normal document
+		   scrolling instead of a viewport-locked inner scroll. */
+		.content {
+			height: auto;
+			min-height: 0;
+		}
+		.content-inner {
+			overflow: visible;
 		}
 	}
 </style>
