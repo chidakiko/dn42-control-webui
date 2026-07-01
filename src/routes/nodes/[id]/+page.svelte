@@ -27,6 +27,7 @@
 	import NodeDnsTab from '$lib/components/node/NodeDnsTab.svelte';
 	import InternalTopologyTab from '$lib/components/node/InternalTopologyTab.svelte';
 	import LinkTraffic from '$lib/components/node/LinkTraffic.svelte';
+	import ProbeTab from '$lib/components/node/ProbeTab.svelte';
 	import AgentTokensTab from '$lib/components/node/AgentTokensTab.svelte';
 	import RouteTuningTab from '$lib/components/node/RouteTuningTab.svelte';
 	import NodeTrends from '$lib/components/node/NodeTrends.svelte';
@@ -100,7 +101,8 @@
 				{ id: 'peerings', key: 'node.tab.peerings' },
 				{ id: 'links', key: 'node.tab.links' },
 				{ id: 'bgp-sessions', key: 'node.tab.bgpSessions' },
-				{ id: 'internal', key: 'node.tab.internal' }
+				{ id: 'internal', key: 'node.tab.internal' },
+					{ id: 'probe', key: 'node.tab.probe' }
 			]
 		},
 		{
@@ -579,6 +581,8 @@
 			<NodeDnsTab {nodeId} currentGroupId={node?.dns_group_id ?? null} onchange={loadNode} />
 		{:else if tab === 'internal'}
 			<InternalTopologyTab {nodeId} />
+			{:else if tab === 'probe'}
+				<ProbeTab {nodeId} />
 		{:else if tab === 'routing'}
 			<RoutingTab {nodeId} />
 		{:else if tab === 'tuning'}

@@ -624,3 +624,33 @@ export interface AgentReleaseManifest {
 	version: string;
 	wheels: AgentWheel[];
 }
+
+// --- Active probing (ping / mtr / traceroute) ---
+export type ProbeTool = 'ping' | 'mtr' | 'traceroute';
+
+export interface ProbeSpec {
+	tool: ProbeTool;
+	target: string;
+	count?: number;
+}
+
+export interface ProbeStarted {
+	probe_id: string;
+}
+
+export interface ProbeOutput {
+	type: 'output';
+	probe_id: string;
+	seq: number;
+	stream: 'stdout' | 'stderr';
+	text: string;
+}
+
+export interface ProbeDone {
+	type: 'done';
+	probe_id: string;
+	exit_code: number | null;
+	error: string | null;
+}
+
+export type ProbeMessage = ProbeOutput | ProbeDone;

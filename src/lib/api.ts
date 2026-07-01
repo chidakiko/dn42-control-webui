@@ -39,6 +39,9 @@ import type {
 	NotifyResponse,
 	PeeringIn,
 	PeeringOut,
+	ProbeMessage,
+	ProbeSpec,
+	ProbeStarted,
 	ProvisionOut,
 	Registration,
 	RoutingDashboard,
@@ -368,12 +371,79 @@ export const api = {
 		return request<AgentReleaseManifest>('POST', '/api/v1/admin/agent-releases', fd);
 	},
 
+	// --- Active probing (ping / mtr / traceroute) ---
+	probeStart: (nodeId: string, spec: ProbeSpec) =>
+		request<ProbeStarted>('POST', '/api/v1/ui/probes', { node_id: nodeId, spec }),
+
 	// --- Provision + audit ---
 	provision: (body: unknown) =>
 		request<ProvisionOut>('POST', '/api/v1/admin/provision', body),
 	auditLog: (limit = 100) =>
 		request<{ entries: AuditEntry[] }>('GET', `/api/v1/admin/audit-log?limit=${limit}`)
 };
+
+/**
+ * Subscribe to a probe's live output via SSE.
+ *
+ * `EventSource` can't send an `Authorization` header, so we read the
+ * `text/event-stream` body off `fetch` ourselves (keeps the admin token out of
+ * the URL / server logs). Each SSE `data:` line is a JSON `ProbeMessage`;
+ * `onMessage` fires per frame until a `done` message arrives or `signal` aborts.
+ */
+export async function streamProbe(
+	probeId: string,
+	onMessage: (msg: ProbeMessage) => void,
+	signal?: AbortSignal
+): Promise<void> {
+	const headers: Record<string, string> = { Accept: 'text/event-stream' };
+	if (auth.token) headers['Authorization'] = `Bearer ${auth.token}`;
+
+	let res: Response;
+	try {
+		res = await fetch(`${auth.apiBase}/api/v1/ui/probes/${enc(probeId)}/stream`, {
+			method: 'GET',
+			headers,
+			signal
+		});
+	} catch {
+		throw new ApiError(0, `Cannot reach control server at ${auth.apiBase}.`, null);
+	}
+
+	if (res.status === 401) {
+		auth.logout();
+		void goto('/login');
+		throw new ApiError(401, 'Unauthorized — admin token rejected', null);
+	}
+	if (!res.ok || !res.body) {
+		throw new ApiError(res.status, `HTTP ${res.status} ${res.statusText}`, null);
+	}
+
+	const reader = res.body.getReader();
+	const decoder = new TextDecoder();
+	let buf = '';
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buf += decoder.decode(value, { stream: true });
+			// SSE frames are separated by a blank line ("\n\n").
+			let sep: number;
+			while ((sep = buf.indexOf('\n\n')) >= 0) {
+				const frame = buf.slice(0, sep);
+				buf = buf.slice(sep + 2);
+				const dataLine = frame.split('\n').find((l) => l.startsWith('data:'));
+				if (!dataLine) continue;
+				try {
+					onMessage(JSON.parse(dataLine.slice(5).trim()) as ProbeMessage);
+				} catch {
+					/* ignore malformed frame */
+				}
+			}
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
 
 function enc(segment: string): string {
 	return encodeURIComponent(segment);
