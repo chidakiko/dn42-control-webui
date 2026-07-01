@@ -15,6 +15,8 @@
 	let tool = $state<ProbeTool>('ping');
 	let target = $state('');
 	let count = $state(10);
+	// rDNS resolution applies to mtr / traceroute only; ping ignores it server-side.
+	let resolve = $state(true);
 	let running = $state(false);
 	let output = $state('');
 	let exitInfo = $state<{ code: number | null; error: string | null } | null>(null);
@@ -39,7 +41,7 @@
 		const controller = new AbortController();
 		ctrl = controller;
 		try {
-			const { probe_id } = await api.probeStart(nodeId, { tool, target: tgt, count });
+			const { probe_id } = await api.probeStart(nodeId, { tool, target: tgt, count, resolve });
 			await streamProbe(
 				probe_id,
 				(msg) => {
@@ -108,6 +110,10 @@
 		<span>{t('probe.count')}</span>
 		<input type="number" bind:value={count} min="1" max="30" disabled={running || tool === 'traceroute'} />
 	</label>
+	<label class="field resolve" class:off={tool === 'ping'}>
+		<span>{t('probe.resolve')}</span>
+		<input type="checkbox" bind:checked={resolve} disabled={running || tool === 'ping'} />
+	</label>
 	{#if running}
 		<button type="button" class="btn danger" onclick={stop}>
 			<Icon name="refresh" size={14} />{t('probe.stop')}
@@ -158,6 +164,16 @@
 	}
 	.field.count {
 		width: 5rem;
+	}
+	.field.resolve input {
+		width: 1.15rem;
+		height: 1.15rem;
+		margin-top: 0.3rem;
+		accent-color: var(--brand, #f38020);
+		cursor: pointer;
+	}
+	.field.resolve.off {
+		opacity: 0.55;
 	}
 	.field input {
 		background: var(--bg-elev);

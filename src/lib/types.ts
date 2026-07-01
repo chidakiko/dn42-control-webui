@@ -632,6 +632,9 @@ export interface ProbeSpec {
 	tool: ProbeTool;
 	target: string;
 	count?: number;
+	// Resolve per-hop addresses to rDNS names (mtr shows IP + hostname, traceroute
+	// shows "hostname (IP)"); off = numeric only. Ignored by ping.
+	resolve?: boolean;
 }
 
 export interface ProbeStarted {
