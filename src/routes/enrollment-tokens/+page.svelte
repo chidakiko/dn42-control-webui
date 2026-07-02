@@ -1,11 +1,16 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	import { pollEffect } from '$lib/refresh.svelte';
+	import { urlParam } from '$lib/urlstate.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
+	import { createSort, cmp, matches } from '$lib/table.svelte';
+	import SortTh from '$lib/components/SortTh.svelte';
 	import { toast } from '$lib/toast.svelte';
+	import { confirmDialog } from '$lib/confirm.svelte';
 	import { fmtTime } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import InlineBanner from '$lib/components/InlineBanner.svelte';
 	import type { EnrollmentTokenOut } from '$lib/types';
 	import Modal from '$lib/components/Modal.svelte';
 	import SecretReveal from '$lib/components/SecretReveal.svelte';
@@ -15,13 +20,32 @@
 	let loading = $state(true);
 	let error = $state('');
 
+	// Client-side search (?q=) + column sort; newest first by default.
+	const qParam = urlParam('q');
+	const sort = createSort('created_at', -1);
+	const SORT_FIELDS: Record<string, (x: EnrollmentTokenOut) => string | number | null> = {
+		token_id: (x) => x.token_id,
+		node_id: (x) => x.node_id,
+		expires_at: (x) => x.expires_at,
+		created_at: (x) => x.created_at
+	};
+	let view = $derived.by(() => {
+		const rows = items.filter((x) => matches(qParam.value, x.token_id, x.node_id, x.description));
+		const get = SORT_FIELDS[sort.key];
+		return get ? [...rows].sort((a, b) => sort.dir * cmp(get(a), get(b))) : rows;
+	});
+
 	let showCreate = $state(false);
 	let saving = $state(false);
 	let f = $state({ node_id: '', description: '', expires_at: '', token: '' });
 	let secret = $state<string | null>(null);
+	const formGuard = dirtyGuard(
+		() => showCreate,
+		() => f
+	);
 
 	async function load() {
-		loading = true;
+		if (items.length === 0) loading = true;
 		error = '';
 		try {
 			items = await api.listEnrollmentTokens();
@@ -31,10 +55,7 @@
 			loading = false;
 		}
 	}
-	$effect(() => {
-		autoRefresh.tick;
-		untrack(() => load());
-	});
+	pollEffect(() => load());
 
 	async function create() {
 		saving = true;
@@ -57,7 +78,14 @@
 	}
 
 	async function del(tok: EnrollmentTokenOut) {
-		if (!confirm(t('enr.confirmDelete', tok.token_id))) return;
+		if (
+			!(await confirmDialog({
+				message: t('enr.confirmDelete', tok.token_id),
+				confirmLabel: t('common.delete'),
+				danger: true
+			}))
+		)
+			return;
 		try {
 			await api.deleteEnrollmentToken(tok.token_id);
 			toast.success(t('enr.deleted'));
@@ -77,6 +105,13 @@
 
 <div class="page-head" style="justify-content:flex-end">
 	<div class="ph-actions">
+		<input
+			class="search"
+			type="search"
+			placeholder={t('common.search')}
+			value={qParam.value}
+			oninput={(e) => (qParam.value = e.currentTarget.value)}
+		/>
 		<button class="btn primary sm" onclick={() => (showCreate = true)}>+ {t('enr.new')}</button>
 	</div>
 </div>
@@ -96,9 +131,10 @@
 			cols={['7rem', '5rem', '8rem', '4rem', '6rem', '6rem', '3rem']}
 		/>
 	</div>
-{:else if error}
+{:else if error && items.length === 0}
 	<div class="card"><p class="error-text">{error}</p></div>
 {:else}
+	{#if error}<InlineBanner detail={error} />{/if}
 	<div class="card" style="padding:0">
 		{#if items.length === 0}
 			<EmptyState
@@ -111,10 +147,18 @@
 		{:else}
 			<table>
 				<thead>
-					<tr><th>{t('enr.col.id')}</th><th>{t('enr.col.node')}</th><th>{t('enr.col.desc')}</th><th>{t('enr.col.state')}</th><th>{t('enr.col.expires')}</th><th>{t('enr.col.created')}</th><th></th></tr>
+					<tr>
+						<SortTh label={t('enr.col.id')} sortKey="token_id" {sort} />
+						<SortTh label={t('enr.col.node')} sortKey="node_id" {sort} />
+						<th>{t('enr.col.desc')}</th>
+						<th>{t('enr.col.state')}</th>
+						<SortTh label={t('enr.col.expires')} sortKey="expires_at" {sort} />
+						<SortTh label={t('enr.col.created')} sortKey="created_at" {sort} />
+						<th></th>
+					</tr>
 				</thead>
 				<tbody>
-					{#each items as tok (tok.token_id)}
+					{#each view as tok (tok.token_id)}
 						{@const s = tokenState(tok)}
 						<tr>
 							<td class="mono">{tok.token_id}</td>
@@ -127,6 +171,8 @@
 								<button class="btn ghost sm danger" onclick={() => del(tok)}>{t('common.delete')}</button>
 							</td>
 						</tr>
+					{:else}
+						<tr><td colspan="7" class="empty">{t('common.noMatch')}</td></tr>
 					{/each}
 				</tbody>
 			</table>
@@ -134,7 +180,7 @@
 	</div>
 {/if}
 
-<Modal title={t('enr.create')} bind:open={showCreate}>
+<Modal title={t('enr.create')} bind:open={showCreate} dirty={formGuard.dirty && !saving}>
 	<label class="field"><span>{t('enr.f.node')}</span><input bind:value={f.node_id} /></label>
 	<label class="field"><span>{t('enr.f.desc')}</span><input bind:value={f.description} /></label>
 	<label class="field"><span>{t('enr.f.expires')}</span><input type="datetime-local" bind:value={f.expires_at} /></label>

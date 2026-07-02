@@ -2,13 +2,28 @@
 	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
+	import { confirmDialog } from '$lib/confirm.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
 	import { t } from '$lib/i18n.svelte';
-	import type { DnsRecordOut } from '$lib/types';
+	import type { DnsGroupZoneOut, DnsRecordOut } from '$lib/types';
 	import Modal from '$lib/components/Modal.svelte';
+	import RowMenu from '$lib/components/RowMenu.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import SkeletonTable from '$lib/components/SkeletonTable.svelte';
 
-	let { gid, zid, zone }: { gid: number; zid: number; zone: string } = $props();
+	let {
+		gid,
+		zid,
+		zone,
+		onzone
+	}: {
+		gid: number;
+		zid: number;
+		zone: string;
+		// record writes return the recounted parent zone; bubble it up so the
+		// zones table's record_count updates without a reload.
+		onzone?: (z: DnsGroupZoneOut) => void;
+	} = $props();
 
 	const TYPES = ['A', 'AAAA', 'CNAME', 'NS', 'PTR', 'TXT', 'MX', 'SRV', 'CAA'];
 
@@ -26,6 +41,10 @@
 	let fComment = $state('');
 	let fEnabled = $state(true);
 	let ptrIp = $state('');
+	const formGuard = dirtyGuard(
+		() => showForm,
+		() => [fName, fType, fContent, fTtl, fComment, fEnabled]
+	);
 
 	async function load() {
 		loading = true;
@@ -118,14 +137,17 @@
 		saving = true;
 		try {
 			if (editing) {
-				await api.updateZoneRecord(gid, zid, editing.id, body());
+				const r = await api.updateZoneRecord(gid, zid, editing.id, body());
+				if (r.record) records = records.map((x) => (x.id === r.record!.id ? r.record! : x));
+				onzone?.(r.zone);
 				toast.success(t('dns.rec.updated'));
 			} else {
-				await api.createZoneRecord(gid, zid, body());
+				const r = await api.createZoneRecord(gid, zid, body());
+				if (r.record) records = [...records, r.record];
+				onzone?.(r.zone);
 				toast.success(t('dns.rec.created'));
 			}
 			showForm = false;
-			await load();
 		} catch (e) {
 			toast.error(errorMessage(e));
 		} finally {
@@ -133,12 +155,21 @@
 		}
 	}
 
-	async function remove(r: DnsRecordOut) {
-		if (!confirm(t('dns.rec.confirmDelete', `${r.name} ${r.type}`))) return;
+	async function remove(rec: DnsRecordOut) {
+		if (
+			!(await confirmDialog({
+				message: t('dns.rec.confirmDelete', `${rec.name} ${rec.type}`),
+				confirmLabel: t('common.delete'),
+				danger: true
+			}))
+		)
+			return;
 		try {
-			await api.deleteZoneRecord(gid, zid, r.id);
+			// DELETE is 200 with the recounted zone now (not 204)
+			const r = await api.deleteZoneRecord(gid, zid, rec.id);
+			records = records.filter((x) => x.id !== rec.id);
+			onzone?.(r.zone);
 			toast.success(t('dns.rec.deleted'));
-			await load();
 		} catch (e) {
 			toast.error(errorMessage(e));
 		}
@@ -187,8 +218,12 @@
 					<td class="faint">{r.ttl ?? '—'}</td>
 					<td class="faint" style="font-size:0.82rem">{r.comment ?? ''}</td>
 					<td class="actions">
-						<button class="btn ghost sm" onclick={() => openEdit(r)}>{t('common.edit')}</button>
-						<button class="btn ghost sm danger" onclick={() => remove(r)}>✕</button>
+						<RowMenu
+							actions={[
+								{ label: t('common.edit'), icon: 'edit', onselect: () => openEdit(r) },
+								{ label: t('common.delete'), icon: 'trash', danger: true, onselect: () => remove(r) }
+							]}
+						/>
 					</td>
 				</tr>
 			{/each}
@@ -196,7 +231,7 @@
 	</table>
 {/if}
 
-<Modal title={editing ? t('dns.rec.edit') : t('dns.rec.new')} bind:open={showForm}>
+<Modal title={editing ? t('dns.rec.edit') : t('dns.rec.new')} bind:open={showForm} dirty={formGuard.dirty && !saving}>
 	<div class="form">
 		<label>
 			<span>{t('dns.rec.field.type')}</span>

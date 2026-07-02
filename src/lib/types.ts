@@ -64,10 +64,36 @@ export interface FleetHealth {
 // Agent liveness + version, folded into the /ui overview rows from the
 // heartbeat-fed registry. All null for agents never heard from (or after a
 // control-server restart, until the next heartbeat ~30s later).
+// `liveness` is server-graded (75s/300s thresholds live on the control server);
+// never-heard-from agents grade as "offline".
+export type AgentLiveness = 'online' | 'stale' | 'offline';
 export interface AgentLivenessFields {
 	agent_version: string | null;
 	last_heartbeat_at: string | null; // ISO 8601
 	agent_up_to_date: boolean | null; // null = no global target set, or never seen
+	liveness: AgentLiveness;
+}
+
+// Server-resolved placement for a node (the site→geo registry lives on the
+// control server now). `city` is null when the site code is unknown and the
+// lat/lon fall back to the DN42 region centre; the whole object is null when
+// nothing is known. `country` is ISO 3166-1 alpha-2.
+export interface NodeGeo {
+	lat: number;
+	lon: number;
+	city: string | null;
+	country: string | null;
+	region: number | null;
+}
+
+// Fleet-wide liveness/version aggregation (server-computed). Top-level field on
+// FleetOverview — deliberately NOT merged into `summary`, whose keys are health
+// values ("stale" would collide across the two meanings).
+export interface AgentSummary {
+	online: number;
+	stale: number;
+	offline: number;
+	agents_behind: number;
 }
 
 export interface FleetOverviewNode extends NodeHealthRow, AgentLivenessFields {
@@ -78,6 +104,7 @@ export interface FleetOverviewNode extends NodeHealthRow, AgentLivenessFields {
 	// has a DesiredState.
 	site: string | null;
 	region: number | null;
+	geo: NodeGeo | null;
 }
 export interface FleetLink {
 	a: string;
@@ -88,6 +115,7 @@ export interface FleetLink {
 }
 export interface FleetOverview {
 	summary: Partial<Record<NodeHealthValue, number>>;
+	agent_summary: AgentSummary;
 	agent_target_version: string | null;
 	nodes: FleetOverviewNode[];
 	links: FleetLink[];
@@ -140,6 +168,55 @@ export interface NodeStatusEvents {
 	events: StatusEvent[];
 }
 
+// Slim status-event list row (GET /ui/nodes/{id}/status-events): no payload —
+// report rows carry the pre-extracted drift_count instead. Full payload comes
+// from GET /ui/status-events/{id} on demand. List stays newest-first (log
+// semantics, paged via before_id).
+export interface StatusEventSummary {
+	id: number;
+	kind: string;
+	generation: number | null;
+	status: string | null;
+	created_at: string | null;
+	drift_count?: number | null;
+}
+export interface NodeStatusEventsSlim {
+	node_id: string;
+	events: StatusEventSummary[];
+}
+
+// GET /ui/nodes/{id}/trends — sparkline-ready series distilled server-side from
+// the snapshot/report/apply event history. All series are chronological
+// (oldest→newest). A never-reported node yields 200 with null currents / empty
+// series (404 is reserved for "node does not exist").
+export interface TrendsSelfMetricsPoint {
+	at: string;
+	cpu_percent: number | null;
+	rss_mb: number | null;
+	last_routing_collect_seconds: number | null;
+	last_reresolve_seconds: number | null;
+}
+export interface NodeTrendsOut {
+	node_id: string;
+	// series distillation time (as-of stamp)
+	generated_at?: string;
+	self_metrics: {
+		current: AgentSelfMetrics | null;
+		series: TrendsSelfMetricsPoint[];
+	};
+	drift: {
+		current: number;
+		series: { at: string; count: number }[];
+	};
+	apply: {
+		total: number;
+		succeeded: number;
+		last_status: string | null;
+		last_at: string | null;
+		series: { at: string; status: string | null }[];
+	};
+}
+
 // WG tunnel observation, carried in last_snapshot.wireguard_interfaces[].
 // Mirrors dn42_schemas.ObservedWireGuardInterface / ObservedWireGuardPeer.
 export interface ObservedWgPeer {
@@ -168,17 +245,23 @@ export interface ObservedBgpProtocol {
 }
 
 // WebUI-specific observability aggregates (server pre-computes these).
+// In `?range=` grid mode the series is a fixed-length bucket grid: buckets with
+// no data carry null rates (gaps, not fabricated zeros).
 export interface TrafficPoint {
 	captured_at: string | null;
-	rx_bytes_per_sec: number;
-	tx_bytes_per_sec: number;
+	rx_bytes_per_sec: number | null;
+	tx_bytes_per_sec: number | null;
 }
 export interface NodeTraffic {
 	node_id: string;
 	points: TrafficPoint[];
+	// `?compare=1`: the immediately-preceding window, same bucket size and
+	// count as `points` — overlay by index.
+	points_previous?: TrafficPoint[];
 }
 export interface FleetTraffic {
 	points: TrafficPoint[];
+	points_previous?: TrafficPoint[];
 }
 export interface NodeTrafficNow {
 	node_id: string;
@@ -233,6 +316,9 @@ export interface NodeBgpSessions {
 
 // One-shot node page payload — health row + everything the overview/status columns
 // need, so the page fetches once instead of 4× nodeHealth + parsing last_snapshot.
+// Embeds the full node record (+ resolved dns_group name and geo), so the page no
+// longer pairs this with GET /admin/nodes/{id}. 404 only when the node doesn't
+// exist; a never-reported node returns a health:"unknown" skeleton + full `node`.
 export interface NodeOverview extends NodeHealthRow, AgentLivenessFields {
 	capabilities: string[];
 	self_metrics: AgentSelfMetrics | null;
@@ -240,6 +326,31 @@ export interface NodeOverview extends NodeHealthRow, AgentLivenessFields {
 	links: LinkStatus[];
 	bgp_sessions: BgpSessionStatus[];
 	agent_target_version: string | null;
+	node: NodeOut;
+	dns_group: { id: number; name: string } | null;
+	geo: NodeGeo | null;
+}
+
+// GET /ui/nodes — node list rows with the liveness/health join done server-side
+// (replaces the client-side listNodes + fleetOverview merge). Carries NodeOut's
+// scalar fields but not the heavy base_template / inventory blobs.
+export interface UiNodeRow extends AgentLivenessFields {
+	node_id: string;
+	asn: number;
+	router_id: string;
+	site: string | null;
+	loopback_ipv4: string | null;
+	loopback_ipv6: string | null;
+	link_local: string | null;
+	ipv4_prefixes: string[];
+	ipv6_prefixes: string[];
+	labels: Record<string, string>;
+	current_generation: number;
+	lifecycle: string;
+	dns_group_id: number | null;
+	created_at: string;
+	updated_at: string;
+	health: NodeHealthValue;
 }
 
 export interface GenerationOut {
@@ -306,6 +417,48 @@ export interface SessionOut {
 	spec: Record<string, unknown>;
 }
 
+// --- Route tuning (GET/PUT /ui/nodes/{id}/route-tuning) ---
+// The server does field-level merging into base_template.bird / session specs,
+// so the browser never round-trips raw JSON blobs (no lost-update races).
+export interface RouteTuningRule {
+	prefix: string;
+	local_pref: number;
+}
+export interface RouteTuningSession {
+	id: number;
+	name: string;
+	remote_asn: number;
+	link_latency: number | null;
+}
+export interface RouteTuningView {
+	node_id: string;
+	cold_potato_med: number;
+	route_local_pref: RouteTuningRule[];
+	sessions: RouteTuningSession[];
+	updated_at?: string | null;
+}
+
+// GET /ui/nodes/{id}/peer-defaults — the peer wizard's prefill, derived
+// server-side (node WG key reuse + the house link-local convention).
+export interface PeerDefaults {
+	node_id: string;
+	wireguard: {
+		private_key_ref: string | null;
+		link_local: string | null;
+		used_listen_ports: number[];
+	};
+}
+
+// POST /admin/nodes/{id}/peerings/provision with bgp_specs[] — everything is
+// created in one transaction (no partial-success states). The legacy
+// single-session `bgp_session` field still exists in the response; new code
+// reads `sessions`.
+export interface ProvisionPeeringOut {
+	peering: PeeringOut;
+	interface: InterfaceOut;
+	sessions: SessionOut[];
+}
+
 export interface DnsGroupOut {
 	id: number;
 	name: string;
@@ -348,6 +501,18 @@ export interface DnsRecordOut {
 	sort_order: number;
 	created_at: string;
 	updated_at: string;
+}
+
+// DNS zone/record write responses carry the freshly-recounted parent, so the UI
+// can update zone_count/record_count in place instead of double-refreshing.
+// DELETE returns 200 with this body (not 204) — `zone`/`record` is null then.
+export interface DnsZoneWriteOut {
+	zone: DnsGroupZoneOut | null;
+	group: DnsGroupOut;
+}
+export interface DnsRecordWriteOut {
+	record: DnsRecordOut | null;
+	zone: DnsGroupZoneOut;
 }
 
 export interface AgentTokenOut {
@@ -519,6 +684,14 @@ export interface FleetRouting {
 		route_count_v4: number;
 		route_count_v6: number;
 		rpki: RpkiCounts;
+		// per-family RPKI splits (same fleet-wide aggregation as `rpki`)
+		rpki_v4: RpkiCounts;
+		rpki_v6: RpkiCounts;
+		// distinct origin ASes in the RIB (fleet-wide dedup; per-family dedup
+		// separately — the same AS can count on both sides)
+		as_count: number;
+		as_count_v4: number;
+		as_count_v6: number;
 		nodes_reporting: number;
 	};
 	nodes: FleetRoutingNode[];
@@ -526,17 +699,54 @@ export interface FleetRouting {
 
 export interface FleetRoutingTrendPoint {
 	captured_at: string | null;
-	size: number;
+	size: number; // total (= v4 + v6), kept for compatibility
+	size_v4: number;
+	size_v6: number;
 	announced: number;
 	withdrawn: number;
+}
+
+export interface OriginEntry {
+	asn: number;
+	count: number;
+	count_v4: number;
+	count_v6: number;
 }
 
 export interface FleetRoutingOverview {
 	summary: FleetRouting['summary'];
 	nodes: FleetRoutingNode[];
+	// newest routing snapshot among the aggregated nodes (as-of stamp)
+	captured_at: string | null;
 	trend: FleetRoutingTrendPoint[];
-	origins: Array<{ asn: number; count: number }>;
+	origins: OriginEntry[];
 	invalid_routes: Array<{ prefix: string; origin_asn: number | null; node_count: number }>;
+}
+
+// GET /ui/dashboard — the whole dashboard in one call (server caches ~3s).
+// Each block is field-for-field identical to its fine-grained endpoint;
+// peering_issues is the bare issue array.
+export interface UiDashboard {
+	// server-side aggregation time (cache-generation time on TTL hits) — the
+	// widgets' "updated at" stamp
+	generated_at: string;
+	overview: FleetOverview;
+	traffic: FleetTraffic;
+	traffic_breakdown: FleetTrafficBreakdown;
+	peering_issues: PeeringIssue[];
+	routing: FleetRoutingOverview;
+}
+
+// GET /ui/session — token probe + server metadata. 401 = bad token, 403 =
+// locked out. heartbeat_interval_seconds is the fleet-wide agent default.
+export interface SessionInfo {
+	authenticated: boolean;
+	scope: string;
+	server_version: string;
+	agent_target_version: string | null;
+	heartbeat_interval_seconds: number;
+	liveness_thresholds: { online_seconds: number; stale_seconds: number };
+	features: string[];
 }
 
 // iBGP/OSPF are not bgp_sessions records — they are synthesised from
@@ -606,6 +816,7 @@ export interface NodeVersionOut {
 	apply_status: string | null;
 	last_seen: string; // ISO 8601 — when control received the last heartbeat
 	up_to_date: boolean; // agent_version === target
+	liveness: AgentLiveness; // server-graded, same thresholds as the fleet rows
 }
 
 export interface ReleasesStatus {

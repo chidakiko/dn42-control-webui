@@ -1,58 +1,33 @@
 <script lang="ts">
 	// Radar-style mini stat cards for a node's overview: current drift (with
 	// trend + delta vs the previous report) and apply success rate, each with a
-	// sparkline derived from the recent report/apply event history.
-	import { api } from '$lib/api';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	// sparkline. Series come pre-distilled from /ui/nodes/{id}/trends (one fetch
+	// in the parent page, shared with NodeSelfMetrics), already chronological.
 	import { t } from '$lib/i18n.svelte';
 	import Sparkline from '../charts/Sparkline.svelte';
 	import HealthBadge from '../HealthBadge.svelte';
 	import Skeleton from '../Skeleton.svelte';
 	import { fade } from 'svelte/transition';
-	import type { StatusEvent } from '$lib/types';
+	import type { NodeTrendsOut } from '$lib/types';
 
-	let { nodeId }: { nodeId: string } = $props();
+	let { trends }: { trends: NodeTrendsOut | null } = $props();
 
-	let reports = $state<StatusEvent[]>([]);
-	let applies = $state<StatusEvent[]>([]);
-	let loaded = $state(false);
+	let loaded = $derived(trends !== null);
 
-	async function load() {
-		try {
-			const [r, a] = await Promise.all([
-				api.statusEvents(nodeId, 'report', 50),
-				api.statusEvents(nodeId, 'apply', 50)
-			]);
-			reports = r.events;
-			applies = a.events;
-		} catch {
-			/* overview is best-effort */
-		} finally {
-			loaded = true;
-		}
-	}
-	$effect(() => {
-		autoRefresh.tick;
-		load();
-	});
-
-	function driftOf(e: StatusEvent): number {
-		const d = (e.payload as { drift?: unknown[] })?.drift;
-		return Array.isArray(d) ? d.length : 0;
-	}
-
-	// events arrive newest-first; reverse for chronological sparklines
-	let driftSeries = $derived([...reports].reverse().map(driftOf));
-	let curDrift = $derived(driftSeries.length ? driftSeries[driftSeries.length - 1] : 0);
+	let driftSeries = $derived(trends?.drift.series.map((p) => p.count) ?? []);
+	let curDrift = $derived(trends?.drift.current ?? 0);
 	let prevDrift = $derived(driftSeries.length > 1 ? driftSeries[driftSeries.length - 2] : curDrift);
 	let driftDelta = $derived(curDrift - prevDrift);
 
-	let applySeries = $derived([...applies].reverse().map((e) => (e.status === 'succeeded' ? 1 : 0)));
-	let succ = $derived(applies.filter((e) => e.status === 'succeeded').length);
-	let rate = $derived(applies.length ? Math.round((succ / applies.length) * 100) : 0);
-	let lastApply = $derived(applies.length ? applies[0].status : null);
+	let applySeries = $derived(
+		trends?.apply.series.map((p) => (p.status === 'succeeded' ? 1 : 0)) ?? []
+	);
+	let succ = $derived(trends?.apply.succeeded ?? 0);
+	let applyTotal = $derived(trends?.apply.total ?? 0);
+	let rate = $derived(applyTotal ? Math.round((succ / applyTotal) * 100) : 0);
+	let lastApply = $derived(trends?.apply.last_status ?? null);
 
-	let hasData = $derived(reports.length > 0 || applies.length > 0);
+	let hasData = $derived(driftSeries.length > 0 || applyTotal > 0);
 </script>
 
 {#if !loaded}
@@ -91,7 +66,7 @@
 			<span class="lbl">{t('trends.applyRate')}</span>
 			<div class="row1">
 				<span class="val">{rate}<span class="pct">%</span></span>
-				<span class="sub faint">{succ}/{applies.length}</span>
+				<span class="sub faint">{succ}/{applyTotal}</span>
 			</div>
 			{#if applySeries.length > 1}
 				<Sparkline values={applySeries} width={150} height={30} color="var(--c-ok)" />

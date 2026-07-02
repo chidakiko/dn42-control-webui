@@ -3,13 +3,13 @@
 	// bird.internal_topology (not bgp_sessions records), so they never show under
 	// "BGP sessions". This surfaces the configured topology plus a routing-derived
 	// liveness hint (rib_routes = best-path routes the protocol contributes).
-	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { t } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import InlineBanner from '$lib/components/InlineBanner.svelte';
 	import SkeletonText from '$lib/components/SkeletonText.svelte';
 	import { fmtTime } from '$lib/format';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	import { pollEffect } from '$lib/refresh.svelte';
 	import type { InternalTopologyView } from '$lib/types';
 
 	let { nodeId }: { nodeId: string } = $props();
@@ -24,20 +24,19 @@
 		try {
 			data = await api.nodeInternalTopology(nodeId);
 		} catch (e) {
-			data = null;
+			// keep the last good view on background-poll hiccups
 			err = errorMessage(e);
 		} finally {
 			loading = false;
 		}
 	}
 
-	// Refresh on each tick + when navigating to another node; untrack the loader
-	// so its own writes don't re-trigger the effect.
-	$effect(() => {
-		autoRefresh.tick;
-		nodeId;
-		untrack(() => load());
-	});
+	// Refresh on each tick + when navigating to another node; overlapping ticks
+	// are skipped by pollEffect.
+	pollEffect(
+		() => load(),
+		() => nodeId
+	);
 
 	const liveBadge = (inRib: boolean) => (inRib ? 'ok' : 'neutral');
 </script>
@@ -49,11 +48,12 @@
 
 {#if loading && !data}
 	<SkeletonText lines={4} />
-{:else if err}
+{:else if err && !data}
 	<p class="error-text">{err}</p>
 {:else if !data || !data.configured}
 	<div class="empty">{t('internal.empty')}</div>
 {:else}
+	{#if err}<InlineBanner detail={err} />{/if}
 	<p class="note">{t('internal.note')}</p>
 
 	<div class="meta">

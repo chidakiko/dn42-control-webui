@@ -1,21 +1,25 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
+	import { promptDialog } from '$lib/confirm.svelte';
 	import { fmtTime } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import InlineBanner from '$lib/components/InlineBanner.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import SkeletonTable from '$lib/components/SkeletonTable.svelte';
 	import type { Registration } from '$lib/types';
 	import Modal from '$lib/components/Modal.svelte';
 	import JsonView from '$lib/components/JsonView.svelte';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	import { pollEffect } from '$lib/refresh.svelte';
+	import { urlParam } from '$lib/urlstate.svelte';
 
 	let items = $state<Registration[]>([]);
 	let loading = $state(true);
 	let error = $state('');
-	let filter = $state('pending');
+	// Status filter lives in ?status= — refresh/back/share keep the view.
+	const filterParam = urlParam('status', 'pending', { push: true });
+	let filter = $derived(filterParam.value);
 
 	let showInv = $state(false);
 	let inv = $state<unknown>(null);
@@ -24,7 +28,7 @@
 		if (items.length === 0) loading = true;
 		error = '';
 		try {
-			const r = await api.listRegistrations(filter || undefined);
+			const r = await api.listRegistrations(filter === 'all' ? undefined : filter);
 			items = r.registrations;
 		} catch (err) {
 			error = errorMessage(err);
@@ -32,18 +36,27 @@
 			loading = false;
 		}
 	}
-	$effect(() => {
-		autoRefresh.tick;
-		filter; // reload when the status filter changes
-		untrack(() => load());
-	});
+	// Reload on tick + when the status filter changes.
+	pollEffect(
+		() => load(),
+		() => filter
+	);
 
 	async function decide(r: Registration, action: 'approve' | 'reject') {
 		const label = action === 'approve' ? t('reg.approve') : t('reg.reject');
-		const note = prompt(t('reg.notePrompt', label)) ?? undefined;
+		// Styled dialog with an optional note. null = cancelled → do nothing (the
+		// old native prompt() flow proceeded even on cancel).
+		const note = await promptDialog({
+			title: label,
+			message: t('reg.notePrompt', label),
+			noteLabel: t('reg.noteLabel'),
+			confirmLabel: label,
+			danger: action === 'reject'
+		});
+		if (note === null) return;
 		try {
-			if (action === 'approve') await api.approveRegistration(r.id, note);
-			else await api.rejectRegistration(r.id, note);
+			if (action === 'approve') await api.approveRegistration(r.id, note || undefined);
+			else await api.rejectRegistration(r.id, note || undefined);
 			toast.success(t('reg.decided', action === 'approve' ? t('reg.approved') : t('reg.rejected')));
 			await load();
 		} catch (err) {
@@ -60,14 +73,14 @@
 	<div class="ph-actions">
 		<Select
 			width="auto"
-			bind:value={filter}
+			value={filter}
 			options={[
-				{ value: '', label: t('reg.all') },
+				{ value: 'all', label: t('reg.all') },
 				{ value: 'pending', label: t('reg.pending') },
 				{ value: 'approved', label: t('reg.approved') },
 				{ value: 'rejected', label: t('reg.rejected') }
 			]}
-			onChange={() => load()}
+			onChange={(v) => (filterParam.value = v)}
 		/>
 	</div>
 </div>
@@ -81,9 +94,10 @@
 			cols={['6rem', '6rem', '4rem', '7rem', '3rem']}
 		/>
 	</div>
-{:else if error}
+{:else if error && items.length === 0}
 	<div class="card"><p class="error-text">{error}</p></div>
 {:else}
+	{#if error}<InlineBanner detail={error} />{/if}
 	<div class="card" style="padding:0">
 		{#if items.length === 0}
 			<EmptyState icon="registrations" title={t('reg.empty')} hint={t('reg.subtitle')} />

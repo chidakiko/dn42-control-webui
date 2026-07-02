@@ -1,6 +1,7 @@
 <script lang="ts">
 	// A textarea bound to a JSON string with live validity feedback. The parent
-	// reads `text`; call `parse()` (exported) to get the value or throw.
+	// reads `text` (and JSON.parses it itself); call `valid()` (exported) to
+	// gate a save on syntactic validity.
 	import { t } from '$lib/i18n.svelte';
 
 	let {

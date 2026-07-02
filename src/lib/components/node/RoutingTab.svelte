@@ -3,7 +3,7 @@
 	import { api, errorMessage } from '$lib/api';
 	import { fmtTime } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	import { pollEffect } from '$lib/refresh.svelte';
 	import type {
 		RouteEntry,
 		RoutingOrigins,
@@ -14,6 +14,8 @@
 	import Donut from './../charts/Donut.svelte';
 	import BarChart from './../charts/BarChart.svelte';
 	import TrendChart from './../charts/TrendChart.svelte';
+	import ChartLegend from './../charts/ChartLegend.svelte';
+	import ShareBar from './../charts/ShareBar.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Modal from './../Modal.svelte';
 	import Select from './../Select.svelte';
@@ -40,8 +42,9 @@
 		invalid: 'var(--c-bad)',
 		not_found: 'var(--c-warn)'
 	};
-	const V4_COLOR = 'var(--c-accent)';
-	const V6_COLOR = 'var(--c-ok)';
+	// address-family split is quantity data, not status → data palette
+	const V4_COLOR = 'var(--c-data-1)';
+	const V6_COLOR = 'var(--c-data-2)';
 
 	async function loadHead() {
 		if (!summary) loading = true;
@@ -68,7 +71,7 @@
 			prefixes = await api.routingPrefixes(nodeId, {
 				family: family || undefined,
 				scope,
-				q: q.trim() || undefined,
+				q: qDebounced.trim() || undefined,
 				limit: LIMIT,
 				offset
 			});
@@ -77,27 +80,35 @@
 		}
 	}
 
-	// Depend only on the refresh tick + node id; untrack the loader so its
-	// internal reads (e.g. `summary`, which it also writes) don't make this
-	// effect self-trigger into a request storm.
+	// Head data rides the shared ticker; overlapping ticks are skipped.
+	pollEffect(
+		() => loadHead(),
+		() => nodeId
+	);
+
+	// Debounced search: typing re-fetches at most every 300ms instead of per
+	// keystroke; Enter (resetAndSearch) flushes immediately.
+	let qDebounced = $state('');
 	$effect(() => {
-		autoRefresh.tick;
-		nodeId;
-		untrack(() => loadHead());
+		const v = q;
+		const id = setTimeout(() => (qDebounced = v), 300);
+		return () => clearTimeout(id);
 	});
 
 	// Reload the prefixes page whenever a filter/search/page changes (or once
-	// summary first arrives). untrack the loader for the same reason.
+	// summary first arrives). untrack the loader so its internal reads don't
+	// make this effect self-trigger into a request storm.
 	$effect(() => {
 		family;
 		scope;
-		q;
+		qDebounced;
 		offset;
 		const ready = summary !== null;
 		if (ready) untrack(() => loadPrefixes());
 	});
 
 	function resetAndSearch() {
+		qDebounced = q; // flush the debounce
 		offset = 0;
 	}
 
@@ -240,7 +251,7 @@
 	let timelineStamps = $derived(timeline ? timeline.events.map((e) => e.captured_at) : []);
 	let timelineSeries = $derived(
 		timeline
-			? [{ label: t('routing.total'), color: 'var(--c-accent)', fill: true, values: routeCountSeries }]
+			? [{ label: t('routing.total'), color: 'var(--c-data-1)', fill: true, values: routeCountSeries }]
 			: []
 	);
 
@@ -249,7 +260,7 @@
 			? timeline.events.map((e) => ({
 					label: '',
 					parts: [
-						{ key: 'announced', value: e.announced, color: V6_COLOR },
+						{ key: 'announced', value: e.announced, color: 'var(--c-ok)' },
 						{ key: 'withdrawn', value: e.withdrawn, color: 'var(--c-bad)' }
 					]
 				}))
@@ -261,7 +272,7 @@
 	function rpkiClass(v: string | null): string {
 		if (v === 'valid') return 'ok';
 		if (v === 'invalid') return 'bad';
-		if (v === 'not-found') return 'warn';
+		if (v === 'not_found') return 'warn';
 		return 'muted';
 	}
 
@@ -303,26 +314,26 @@
 	{/if}
 
 	<!-- headline stats -->
-	<div class="stats">
+	<div class="stat-strip stats">
 		<div class="stat">
-			<span class="num mono">{summary.route_count}</span>
 			<span class="lbl">{t('routing.totalRoutes')}</span>
+			<span class="num mono">{summary.route_count}</span>
 		</div>
 		<div class="stat">
-			<span class="num mono">{summary.route_count_v4}</span>
 			<span class="lbl">{t('routing.v4')}</span>
+			<span class="num mono" style="color:{V4_COLOR}">{summary.route_count_v4}</span>
 		</div>
 		<div class="stat">
-			<span class="num mono">{summary.route_count_v6}</span>
 			<span class="lbl">{t('routing.v6')}</span>
+			<span class="num mono" style="color:{V6_COLOR}">{summary.route_count_v6}</span>
 		</div>
 		<div class="stat">
-			<span class="num mono">{summary.local_count}</span>
 			<span class="lbl">{t('routing.localOrigin')}</span>
+			<span class="num mono">{summary.local_count}</span>
 		</div>
 		<div class="stat">
-			<span class="num mono faint">{fmtTime(summary.captured_at)}</span>
 			<span class="lbl">{t('routing.captured')}</span>
+			<span class="num mono faint">{fmtTime(summary.captured_at)}</span>
 		</div>
 	</div>
 
@@ -332,30 +343,18 @@
 
 	<!-- donuts: family + rpki -->
 	<div class="donuts">
-		<div class="donut-card">
-			<Donut segments={familySegments} size={140} thickness={20} centerValue={summary.route_count} centerLabel={t('routing.routes')} />
-			<div class="legend">
-				{#each familySegments as s (s.label)}
-					<span><span class="kd" style="background:{s.color}"></span>{s.label} <b>{s.value}</b></span>
-				{/each}
-			</div>
+		<!-- Radar "IP version" pattern: legend + big % header over a segmented bar -->
+		<div class="fam-share">
+			<ShareBar segments={familySegments} format={(v) => v.toLocaleString()} />
 		</div>
 		<div class="donut-card">
 			<Donut segments={rpkiSegments} size={140} thickness={20} centerValue={rpkiValidPct} centerLabel={t('routing.rpki.center')} />
-			<div class="legend">
-				{#each rpkiSegments as s (s.label)}
-					<span><span class="kd" style="background:{s.color}"></span>{s.label} <b>{s.value}</b></span>
-				{/each}
-			</div>
+			<ChartLegend column items={rpkiSegments} />
 		</div>
 		{#if prefilter}
 			<div class="donut-card">
 				<Donut segments={prefilterOutcome} size={140} thickness={20} centerValue={prefilterRejectedPct} centerLabel={t('routing.prefilter.center')} />
-				<div class="legend">
-					{#each prefilterOutcome as s (s.label)}
-						<span><span class="kd" style="background:{s.color}"></span>{s.label} <b>{s.value}</b></span>
-					{/each}
-				</div>
+				<ChartLegend column items={prefilterOutcome} />
 			</div>
 		{/if}
 	</div>
@@ -381,11 +380,7 @@
 					<span class="faint sub">{t('routing.timelineSub')}</span>
 				</div>
 				{#if timelineSeries.length > 1}
-					<div class="trend-legend">
-						{#each timelineSeries as s (s.label)}
-							<span><span class="ld" style="background:{s.color}"></span>{s.label}</span>
-						{/each}
-					</div>
+					<ChartLegend items={timelineSeries} />
 				{/if}
 			</div>
 			<TrendChart
@@ -400,10 +395,12 @@
 		<div class="chart-block">
 			<span class="faint">{t('routing.churn')}</span>
 			<BarChart groups={churnGroups} height={80} maxLabels={8} />
-			<div class="legend">
-				<span><span class="kd" style="background:{V6_COLOR}"></span>{t('routing.announced')}</span>
-				<span><span class="kd" style="background:var(--c-bad)"></span>{t('routing.withdrawn')}</span>
-			</div>
+			<ChartLegend
+				items={[
+					{ label: t('routing.announced'), color: 'var(--c-ok)' },
+					{ label: t('routing.withdrawn'), color: 'var(--c-bad)' }
+				]}
+			/>
 		</div>
 	{/if}
 
@@ -703,30 +700,16 @@
 		background: var(--warn-bg);
 		color: var(--warn);
 	}
+	/* layout comes from the global .stat-strip; only the timestamp cell shrinks */
 	.stats {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-		gap: 1rem;
 		margin-bottom: 1rem;
+		row-gap: 0.6rem;
 	}
-	.stat {
-		display: flex;
-		flex-direction: column;
-		gap: 0.15rem;
-	}
-	.stat .num {
-		font-size: 1.5rem;
-		font-weight: 700;
-	}
-	.stat .num.faint {
+	.stats .num.faint {
 		font-size: 0.9rem;
 		font-weight: 500;
-	}
-	.stat .lbl {
-		color: var(--text-faint);
-		font-size: 0.72rem;
-		text-transform: uppercase;
-		letter-spacing: 0.03em;
+		align-self: flex-start;
+		margin-top: auto;
 	}
 	.donuts {
 		display: flex;
@@ -739,24 +722,12 @@
 		align-items: center;
 		gap: 1rem;
 	}
-	.legend {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-		font-size: 0.8rem;
-		color: var(--text-dim);
+	.fam-share {
+		min-width: 220px;
+		max-width: 300px;
+		align-self: center;
 	}
-	.legend span {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-	}
-	.kd {
-		width: 10px;
-		height: 10px;
-		border-radius: 2px;
-		display: inline-block;
-	}
+	/* chart legends now use the shared ChartLegend component */
 	.grid2 {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -785,24 +756,6 @@
 	}
 	.trend-head .sub {
 		font-size: 0.76rem;
-	}
-	.trend-legend {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.9rem;
-		font-size: 0.78rem;
-		color: var(--text-dim);
-	}
-	.trend-legend span {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-	}
-	.ld {
-		width: 14px;
-		height: 3px;
-		border-radius: 2px;
-		display: inline-block;
 	}
 	h4 {
 		margin: 0 0 0.5rem;

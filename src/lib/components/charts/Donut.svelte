@@ -36,8 +36,13 @@
 			: { value: centerValue, label: centerLabel }
 	);
 
-	// crop the canvas to the top half for the gauge variant
-	let boxH = $derived(half ? Math.round(size / 2 + thickness / 2 + 2) : size);
+	// Gauge cropping: Chart.js CENTERS a 180° arc vertically in the square canvas
+	// (getRatioAndOffset) — the semicircle's top edge sits at size/4 and its
+	// equator at 3·size/4, NOT at 0…size/2. Lift the canvas by size/4 so the crop
+	// window shows exactly the full semicircle (cropping 0…size/2 instead shows
+	// only the upper band of the arch — a thin floating arc).
+	let boxH = $derived(half ? Math.round(size / 2 + 4) : size);
+	let liftY = $derived(half ? Math.round(size / 4) - 2 : 0);
 	let cutout = $derived(`${Math.round((1 - thickness / (size / 2)) * 100)}%`);
 
 	let config = $derived.by((): ChartConfiguration<'doughnut'> => {
@@ -84,7 +89,9 @@
 </script>
 
 <div class="donut" style:width="{size}px" style:height="{boxH}px">
-	<ChartCanvas config={config as unknown as ChartConfiguration} width={size} height={size} fixed label="donut chart" />
+	<div class="lift" style:margin-top="-{liftY}px">
+		<ChartCanvas config={config as unknown as ChartConfiguration} width={size} height={size} fixed label="donut chart" />
+	</div>
 	{#if !half && (center.value !== '' || center.label !== '')}
 		<div class="center" style:height="{size}px">
 			{#if center.value !== ''}

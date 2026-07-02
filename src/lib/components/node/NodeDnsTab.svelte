@@ -8,8 +8,16 @@
 	let {
 		nodeId,
 		currentGroupId,
+		currentName: pipedName = null,
 		onchange
-	}: { nodeId: string; currentGroupId: number | null; onchange?: () => void } = $props();
+	}: {
+		nodeId: string;
+		currentGroupId: number | null;
+		// resolved group name piped from the parent's /overview fetch, so the
+		// "current" line renders before (or without) the group list loading.
+		currentName?: string | null;
+		onchange?: () => void;
+	} = $props();
 
 	let groups = $state<DnsGroupOut[]>([]);
 	let selected = $state<number | ''>('');
@@ -36,7 +44,9 @@
 		selected = currentGroupId ?? '';
 	});
 
-	let currentName = $derived(groups.find((g) => g.id === currentGroupId)?.name ?? null);
+	let currentName = $derived(
+		pipedName ?? groups.find((g) => g.id === currentGroupId)?.name ?? null
+	);
 
 	async function apply() {
 		saving = true;

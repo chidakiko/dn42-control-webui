@@ -1,53 +1,67 @@
 /* Design system for the DN42 control admin UI.
  * Radar-inspired: light theme by default, dark via [data-theme="dark"],
- * Cloudflare-orange accent, Inter typography, soft elevation. */
+ * Cloudflare-orange accent, Inter typography. Flat, border-driven surfaces:
+ * shadows are reserved for floating layers (tooltips, dropdowns, modals). */
 
 @import '@fontsource-variable/inter';
 
 :root {
 	color-scheme: light;
-	/* Light theme (default) */
-	--bg: #f6f7f9;
-	--bg-elev: #ffffff;
-	--bg-elev-2: #f1f3f5;
-	--border: #e6e8ec;
-	--border-strong: #d6dae0;
-	--text: #1c2430;
-	--text-dim: #5b6573;
-	--text-faint: #8a94a3;
+	/* Light theme (default) — Kumo neutral surfaces (zero-chroma grays extracted
+	 * from Radar's production tokens; no blue tint anywhere in the base). */
+	--bg: #fafafa; /* kumo canvas 98.75% */
+	--bg-elev: #ffffff; /* kumo base */
+	--bg-elev-2: #f2f2f2; /* kumo recessed / gray[9] */
+	--border: #e8e8e8; /* kumo line: black @10% */
+	--border-strong: #d9d9d9; /* gray[8] */
+	--text: #1d1d1d; /* gray[0] */
+	--text-dim: #595959; /* gray[4] */
+	--text-faint: #797979; /* gray[5] */
 
-	--accent: #f6821f; /* Cloudflare orange */
+	--accent: #f6821f; /* Cloudflare orange — brand/emphasis only */
 	--accent-hover: #e3710f;
 	--accent-soft: #fdf0e3;
+	--link: #0051c3; /* Radar links are blue (blue[4]); orange stays non-link */
 
 	--ok: #0a7d5a;
 	--warn: #9a6700;
 	--bad: #c5292e;
 	--down: #b01218;
-	--unknown: #6b7785;
+	--unknown: #737373;
 
 	/* badge tint backgrounds */
 	--ok-bg: #e4f6ee;
 	--warn-bg: #fbf1dd;
 	--bad-bg: #fdeceb;
-	--neutral-bg: #eef1f4;
+	--neutral-bg: #f0f0f0;
 
-	/* chart palette */
+	/* chart palette — semantic (status charts only: health, RPKI, churn) */
 	--c-ok: #17a673;
 	--c-warn: #e8a23d;
 	--c-bad: #e5484d;
 	--c-down: #b01218;
-	--c-unknown: #b3bcc7;
+	--c-unknown: #b6b6b6;
 	--c-accent: #f6821f;
-	--c-grid: #e6e8ec;
+	/* data-series palette (quantity charts: traffic, route counts, shares) —
+	 * Radar/Kumo categorical order blue → cyan → orange, so orange keeps
+	 * reading as "accent" and green/red stay reserved for status. */
+	--c-data-1: #0045a6;
+	--c-data-2: #30b6da;
+	--c-data-3: #f6821f;
+	--c-data-other: #003681;
+	/* chart grid/axis — text-color alphas (Radar: line 10% / dashed 15% /
+	 * label 65%), theme-adaptive without separate light/dark values. */
+	--c-grid: color-mix(in srgb, var(--text) 10%, transparent);
+	--c-grid-dash: color-mix(in srgb, var(--text) 15%, transparent);
+	--c-axis-label: color-mix(in srgb, var(--text) 65%, transparent);
 
 	--shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.05);
 	--shadow-lg: 0 8px 28px rgba(16, 24, 40, 0.16);
 	--ring: 0 0 0 3px var(--accent-soft);
 
-	--radius-lg: 14px;
-	--radius: 12px;
-	--radius-sm: 8px;
+	--radius-lg: 8px;
+	--radius: 6px;
+	--radius-sm: 4px;
 	--mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 	--sans: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
 		Helvetica, Arial, sans-serif;
@@ -55,37 +69,44 @@
 
 :root[data-theme='dark'] {
 	color-scheme: dark;
-	--bg: #0e1116;
-	--bg-elev: #161b22;
-	--bg-elev-2: #1c232c;
-	--border: #262d36;
-	--border-strong: #39414c;
-	--text: #e6edf3;
-	--text-dim: #9aa7b4;
-	--text-faint: #6b7785;
+	/* Kumo dark: near-black neutral canvas, cards a step lighter — Radar's
+	 * signature dark look (canvas 10% / base 17% / hairline 26.9% / line 32%). */
+	--bg: #0a0a0a;
+	--bg-elev: #121212;
+	--bg-elev-2: #1d1d1d;
+	--border: #262626;
+	--border-strong: #383838;
+	--text: #f2f2f2;
+	--text-dim: #a6a6a6;
+	--text-faint: #737373;
 
 	--accent: #f6821f;
 	--accent-hover: #ff922e;
 	--accent-soft: #2a1f12;
+	--link: #82b6ff; /* blue[7] */
 
 	--ok: #3fb950;
 	--warn: #d29922;
 	--bad: #f85149;
 	--down: #f0484d;
-	--unknown: #8a94a3;
+	--unknown: #999999;
 
 	--ok-bg: #122a1c;
 	--warn-bg: #2a2310;
 	--bad-bg: #2a1718;
-	--neutral-bg: #1c232c;
+	--neutral-bg: #1f1f1f;
 
 	--c-ok: #3fb950;
 	--c-warn: #d29922;
 	--c-bad: #f85149;
 	--c-down: #f0484d;
-	--c-unknown: #5b6573;
+	--c-unknown: #595959;
 	--c-accent: #f6821f;
-	--c-grid: #262d36;
+	/* brighter blue/cyan steps of the same Kumo ramps for dark surfaces */
+	--c-data-1: #4693ff;
+	--c-data-2: #73cee6;
+	--c-data-3: #f6821f;
+	--c-data-other: #82b6ff;
 
 	--shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 	--shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.55);
@@ -108,8 +129,10 @@ body {
 	-webkit-font-smoothing: antialiased;
 }
 
+/* Radar convention: hyperlinks are blue; orange never marks "clickable text",
+ * only brand/emphasis (buttons, toggles, active nav). */
 a {
-	color: var(--accent);
+	color: var(--link);
 	text-decoration: none;
 }
 a:hover {
@@ -178,7 +201,6 @@ code,
 	background: var(--accent);
 	border-color: var(--accent);
 	color: #fff;
-	box-shadow: 0 1px 2px rgba(246, 130, 31, 0.25);
 }
 .btn.primary:hover {
 	background: var(--accent-hover);
@@ -255,7 +277,7 @@ textarea::placeholder {
 select {
 	appearance: none;
 	-webkit-appearance: none;
-	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a94a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 	background-repeat: no-repeat;
 	background-position: right 0.55rem center;
 	background-size: 14px;
@@ -272,6 +294,12 @@ textarea {
 input[type='checkbox'] {
 	width: auto;
 }
+/* toolbar search box: fixed width (inputs are 100% by default, which would
+   stretch across the action bar) */
+input.search {
+	width: 13rem;
+}
+
 .row {
 	display: flex;
 	gap: 0.75rem;
@@ -288,15 +316,16 @@ input[type='checkbox'] {
 }
 
 /* --- Cards / panels --- */
+/* Calibrated against Radar's rendered DOM: radius 0.375rem, padding 1.5rem,
+ * 1.5rem gaps between cards. */
 .card {
 	background: var(--bg-elev);
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
-	padding: 1.1rem 1.25rem;
-	box-shadow: var(--shadow);
+	padding: 1.5rem;
 }
 .card + .card {
-	margin-top: 1rem;
+	margin-top: 1.5rem;
 }
 .card-head {
 	display: flex;
@@ -351,8 +380,8 @@ td.actions {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.3rem;
-	padding: 0.1rem 0.5rem;
-	border-radius: 999px;
+	padding: 0.1rem 0.45rem;
+	border-radius: var(--radius-sm);
 	font-size: 0.72rem;
 	font-weight: 600;
 	border: 1px solid transparent;
@@ -506,14 +535,101 @@ hr {
 	flex: none;
 }
 
+/* --- Segmented control (Radar card-corner view switcher: 两者/IPv4/IPv6) ---
+ * Joined buttons, one active. For mutually-exclusive VIEW switching inside a
+ * card; standalone filter chips stay `.chip`. */
+.seg {
+	display: inline-flex;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+}
+.segbtn {
+	background: var(--bg-elev);
+	border: none;
+	border-right: 1px solid var(--border);
+	color: var(--text-dim);
+	padding: 0.25rem 0.55rem;
+	font: inherit;
+	font-size: 0.78rem;
+	font-weight: 550;
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background 0.12s, color 0.12s;
+}
+.segbtn:hover {
+	color: var(--text);
+	background: var(--bg-elev-2);
+}
+.segbtn:last-child {
+	border-right: none;
+}
+.segbtn.active {
+	/* Radar active segment: neutral contrast fill, not brand orange */
+	background: color-mix(in srgb, var(--text) 14%, transparent);
+	color: var(--text);
+	font-weight: 650;
+}
+.segbtn:focus-visible {
+	box-shadow: inset var(--ring);
+}
+
+/* --- Card anatomy extras (Radar card: title · description · as-of stamp) --- */
+.card-sub {
+	color: var(--text-faint);
+	font-size: 0.78rem;
+}
+.card-asof {
+	color: var(--text-faint);
+	font-size: 0.75rem;
+	margin-top: 0.75rem;
+}
+
+/* --- Stat strip (Radar routing-stats header: label over big number,
+ * vertical hairline dividers between cells) --- */
+.stat-strip {
+	display: flex;
+	flex-wrap: wrap;
+	min-width: 0;
+}
+.stat-strip .stat {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	padding: 0.1rem 1.1rem;
+	border-left: 1px solid var(--border);
+}
+.stat-strip .stat:first-child {
+	border-left: none;
+	padding-left: 0;
+}
+.stat-strip .lbl {
+	font-size: 0.72rem;
+	color: var(--text-faint);
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	white-space: nowrap;
+}
+.stat-strip .num {
+	font-size: 1.45rem;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.1;
+}
+.stat-strip .num small {
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--text-dim);
+}
+
 /* --- Filter / segment chips (Cloudflare routing-style) --- */
 .chip {
 	display: inline-flex;
 	align-items: center;
 	gap: 0.4rem;
-	padding: 0.3rem 0.7rem;
+	padding: 0.28rem 0.65rem;
 	border: 1px solid var(--border-strong);
-	border-radius: 999px;
+	border-radius: var(--radius-sm);
 	background: var(--bg-elev);
 	color: var(--text-dim);
 	font-size: 0.8rem;

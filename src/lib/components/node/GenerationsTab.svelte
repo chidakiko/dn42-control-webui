@@ -2,11 +2,13 @@
 	import { onMount } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
+	import { confirmDialog } from '$lib/confirm.svelte';
 	import { fmtTime } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import type { GenerationDiffOut, GenerationOut } from '$lib/types';
 	import Modal from './../Modal.svelte';
+	import InlineBanner from './../InlineBanner.svelte';
 	import SkeletonTable from './../SkeletonTable.svelte';
 	import JsonView from './../JsonView.svelte';
 
@@ -24,7 +26,7 @@
 	let diff = $state<GenerationDiffOut | null>(null);
 
 	async function refresh() {
-		loading = true;
+		if (items.length === 0) loading = true;
 		err = '';
 		try {
 			items = await api.listGenerations(nodeId, 100);
@@ -57,7 +59,16 @@
 	}
 
 	async function rollback(gen: number) {
-		if (!confirm(t('gen.confirmRollback', gen))) return;
+		if (
+			!(await confirmDialog({
+				message: t('gen.confirmRollback', gen),
+				danger: true,
+				// rewrites the node's desired state — make the operator type the
+				// target generation number
+				typeToConfirm: String(gen)
+			}))
+		)
+			return;
 		try {
 			await api.rollbackGeneration(nodeId, gen);
 			toast.success(t('gen.rolledBack', gen));
@@ -74,12 +85,13 @@
 	<button class="btn sm icon" onclick={refresh} disabled={loading} aria-label={t('common.refresh')}><Icon name="refresh" size={15} /></button>
 </div>
 
+{#if err && items.length > 0}<InlineBanner detail={err} />{/if}
 {#if loading && items.length === 0}
 	<SkeletonTable
 		headers={[t('gen.col.gen'), t('gen.col.reason'), t('gen.col.published'), '']}
 		cols={['2.5rem', '12rem', '7rem', '4rem']}
 	/>
-{:else if err}
+{:else if err && items.length === 0}
 	<p class="error-text">{err}</p>
 {:else if items.length === 0}
 	<div class="empty">{t('gen.empty')}</div>

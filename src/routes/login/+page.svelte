@@ -20,11 +20,11 @@
 			return;
 		}
 		busy = true;
-		// Persist first so the test call carries the credentials, then probe a
-		// cheap admin endpoint to confirm the token is accepted.
+		// Persist first so the test call carries the credentials, then probe the
+		// dedicated session endpoint (401 = bad token, 403 = locked out).
 		auth.login(token, apiBase);
 		try {
-			await api.fleetHealth();
+			await api.session();
 			toast.success(t('login.signedIn'));
 			await goto('/');
 		} catch (err) {

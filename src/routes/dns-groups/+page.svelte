@@ -2,22 +2,35 @@
 	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
+	import { confirmDialog } from '$lib/confirm.svelte';
 	import { t } from '$lib/i18n.svelte';
-	import type { DnsGroupOut, DnsGroupZoneOut } from '$lib/types';
+	import type { DnsGroupOut, DnsGroupZoneOut, DnsZoneWriteOut } from '$lib/types';
 	import Modal from '$lib/components/Modal.svelte';
 	import JsonEditor from '$lib/components/JsonEditor.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
-	import DnsRecordsPanel from '$lib/components/node/DnsRecordsPanel.svelte';
+	import InlineBanner from '$lib/components/InlineBanner.svelte';
+	import RowMenu from '$lib/components/RowMenu.svelte';
+	// (lives beside the other shared components — it's the dns-groups page's
+	// records editor, not a node-detail tab)
+	import DnsRecordsPanel from '$lib/components/DnsRecordsPanel.svelte';
 	import SkeletonTable from '$lib/components/SkeletonTable.svelte';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	import { pollEffect } from '$lib/refresh.svelte';
+	import { urlParam, setParams } from '$lib/urlstate.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
 
 	let groups = $state<DnsGroupOut[]>([]);
 	let loading = $state(true);
 	let error = $state('');
 
-	let selectedGroup = $state<DnsGroupOut | null>(null);
+	// The groups → zones → records drill-down lives in ?group= / ?zone=, so the
+	// selection is deep-linkable and survives refresh/back. The selected objects
+	// are derived from the loaded lists, so in-place updates (applyZoneWrite)
+	// propagate without manual reassignment.
+	const groupParam = urlParam('group', '', { push: true });
+	const zoneParam = urlParam('zone', '', { push: true });
 	let zones = $state<DnsGroupZoneOut[]>([]);
-	let selectedZone = $state<DnsGroupZoneOut | null>(null);
+	let selectedGroup = $derived(groups.find((g) => String(g.id) === groupParam.value) ?? null);
+	let selectedZone = $derived(zones.find((z) => String(z.id) === zoneParam.value) ?? null);
 
 	// ---- group form ----
 	let showGroupForm = $state(false);
@@ -40,12 +53,20 @@
 	let zDefaultTtl = $state('');
 	let zEnabled = $state(true);
 
+	const groupFormGuard = dirtyGuard(
+		() => showGroupForm,
+		() => [gName, gBind, gCacheTtl, gEnabled, gForwards]
+	);
+	const zoneFormGuard = dirtyGuard(
+		() => showZoneForm,
+		() => [zName, zPrimaryNs, zAdminEmail, zDefaultTtl, zEnabled]
+	);
+
 	async function loadGroups() {
 		if (groups.length === 0) loading = true;
 		error = '';
 		try {
 			groups = await api.listDnsGroups();
-			if (selectedGroup) selectedGroup = groups.find((g) => g.id === selectedGroup!.id) ?? null;
 		} catch (e) {
 			error = errorMessage(e);
 		} finally {
@@ -59,23 +80,19 @@
 		}
 		try {
 			zones = await api.listGroupZones(selectedGroup.id);
-			if (selectedZone) selectedZone = zones.find((z) => z.id === selectedZone!.id) ?? null;
 		} catch (e) {
 			toast.error(errorMessage(e));
 		}
 	}
-	$effect(() => {
-		autoRefresh.tick;
-		untrack(() => loadGroups());
-	});
+	pollEffect(() => loadGroups());
 	$effect(() => {
 		selectedGroup?.id;
 		untrack(() => loadZones());
 	});
 
 	function selectGroup(g: DnsGroupOut) {
-		selectedGroup = g;
-		selectedZone = null;
+		// one navigation: set the group, clear any zone from the previous group
+		setParams({ group: String(g.id), zone: null }, { push: true });
 	}
 
 	// ---- group CRUD ----
@@ -132,11 +149,18 @@
 		}
 	}
 	async function removeGroup(g: DnsGroupOut) {
-		if (!confirm(t('dns.confirmDelete', g.name))) return;
+		if (
+			!(await confirmDialog({
+				message: t('dns.confirmDelete', g.name),
+				confirmLabel: t('common.delete'),
+				danger: true
+			}))
+		)
+			return;
 		try {
 			await api.deleteDnsGroup(g.id);
 			toast.success(t('dns.deleted'));
-			if (selectedGroup?.id === g.id) selectedGroup = null;
+			if (selectedGroup?.id === g.id) setParams({ group: null, zone: null });
 			await loadGroups();
 		} catch (e) {
 			toast.error(errorMessage(e));
@@ -171,19 +195,39 @@
 			enabled: zEnabled
 		};
 	}
+	// Zone writes return the fresh zone + its recounted parent group — apply both
+	// in place instead of the old zones+groups double refresh.
+	function applyZoneWrite(r: DnsZoneWriteOut, deletedId?: number) {
+		if (deletedId !== undefined) {
+			zones = zones.filter((z) => z.id !== deletedId);
+		} else if (r.zone) {
+			const z = r.zone;
+			zones = zones.some((x) => x.id === z.id)
+				? zones.map((x) => (x.id === z.id ? z : x))
+				: [...zones, z];
+		}
+		// selectedGroup/selectedZone are derived from these arrays, so the
+		// in-place updates propagate without manual reassignment.
+		groups = groups.map((g) => (g.id === r.group.id ? r.group : g));
+	}
+	// Record writes bubble the recounted zone up from DnsRecordsPanel.
+	function applyZoneCounts(z: DnsGroupZoneOut) {
+		zones = zones.map((x) => (x.id === z.id ? z : x));
+	}
 	async function saveZone() {
 		if (!selectedGroup) return;
 		savingZone = true;
 		try {
+			let r: DnsZoneWriteOut;
 			if (editingZone) {
-				await api.updateGroupZone(selectedGroup.id, editingZone.id, zoneBody());
+				r = await api.updateGroupZone(selectedGroup.id, editingZone.id, zoneBody());
 				toast.success(t('dns.zone.updated'));
 			} else {
-				await api.createGroupZone(selectedGroup.id, zoneBody());
+				r = await api.createGroupZone(selectedGroup.id, zoneBody());
 				toast.success(t('dns.zone.created'));
 			}
 			showZoneForm = false;
-			await Promise.all([loadZones(), loadGroups()]);
+			applyZoneWrite(r);
 		} catch (e) {
 			toast.error(errorMessage(e));
 		} finally {
@@ -192,12 +236,20 @@
 	}
 	async function removeZone(z: DnsGroupZoneOut) {
 		if (!selectedGroup) return;
-		if (!confirm(t('dns.zone.confirmDelete', z.zone))) return;
+		if (
+			!(await confirmDialog({
+				message: t('dns.zone.confirmDelete', z.zone),
+				confirmLabel: t('common.delete'),
+				danger: true
+			}))
+		)
+			return;
 		try {
-			await api.deleteGroupZone(selectedGroup.id, z.id);
+			// DELETE is 200 with the write body now (not 204)
+			const r = await api.deleteGroupZone(selectedGroup.id, z.id);
 			toast.success(t('dns.zone.deleted'));
-			if (selectedZone?.id === z.id) selectedZone = null;
-			await Promise.all([loadZones(), loadGroups()]);
+			if (selectedZone?.id === z.id) zoneParam.value = '';
+			applyZoneWrite(r, z.id);
 		} catch (e) {
 			toast.error(errorMessage(e));
 		}
@@ -224,9 +276,10 @@
 			cols={['7rem', '8rem', '3rem', '4rem', '3rem', '3rem']}
 		/>
 	</div>
-{:else if error}
+{:else if error && groups.length === 0}
 	<div class="card"><p class="error-text">{error}</p></div>
 {:else}
+	{#if error}<InlineBanner detail={error} />{/if}
 	<div class="card" style="padding:0">
 		{#if groups.length === 0}
 			<EmptyState
@@ -258,8 +311,12 @@
 							<td><span class="badge {g.enabled ? 'ok' : 'bad'}"><span class="dot"></span>{g.enabled ? t('common.yes') : t('common.no')}</span></td>
 							<td class="actions">
 								<button class="btn ghost sm" onclick={() => selectGroup(g)}>{t('dns.zones')}</button>
-								<button class="btn ghost sm" onclick={() => openGroupEdit(g)}>{t('common.edit')}</button>
-								<button class="btn ghost sm danger" onclick={() => removeGroup(g)}>✕</button>
+								<RowMenu
+									actions={[
+										{ label: t('common.edit'), icon: 'edit', onselect: () => openGroupEdit(g) },
+										{ label: t('common.delete'), icon: 'trash', danger: true, onselect: () => removeGroup(g) }
+									]}
+								/>
 							</td>
 						</tr>
 					{/each}
@@ -274,7 +331,7 @@
 				<h2 style="margin:0">{t('dns.zones')} · <span class="mono">{selectedGroup.name}</span></h2>
 				<div class="inline">
 					<button class="btn sm primary" onclick={openZoneCreate}>+ {t('dns.zone.new')}</button>
-					<button class="btn ghost sm" onclick={() => (selectedGroup = null)}>✕</button>
+					<button class="btn ghost sm" onclick={() => setParams({ group: null, zone: null })}>✕</button>
 				</div>
 			</div>
 			{#if zones.length === 0}
@@ -292,9 +349,13 @@
 								<td>{z.record_count}</td>
 								<td><span class="badge {z.enabled ? 'ok' : 'bad'}"><span class="dot"></span>{z.enabled ? t('common.yes') : t('common.no')}</span></td>
 								<td class="actions">
-									<button class="btn ghost sm" onclick={() => (selectedZone = z)}>{t('dns.rec.title')}</button>
-									<button class="btn ghost sm" onclick={() => openZoneEdit(z)}>{t('common.edit')}</button>
-									<button class="btn ghost sm danger" onclick={() => removeZone(z)}>✕</button>
+									<button class="btn ghost sm" onclick={() => (zoneParam.value = String(z.id))}>{t('dns.rec.title')}</button>
+									<RowMenu
+										actions={[
+											{ label: t('common.edit'), icon: 'edit', onselect: () => openZoneEdit(z) },
+											{ label: t('common.delete'), icon: 'trash', danger: true, onselect: () => removeZone(z) }
+										]}
+									/>
 								</td>
 							</tr>
 						{/each}
@@ -305,7 +366,12 @@
 			{#if selectedZone}
 				<div style="margin-top:1.1rem; border-top:1px solid var(--border, rgba(127,127,127,0.2)); padding-top:1rem">
 					{#key selectedZone.id}
-						<DnsRecordsPanel gid={selectedGroup.id} zid={selectedZone.id} zone={selectedZone.zone} />
+						<DnsRecordsPanel
+							gid={selectedGroup.id}
+							zid={selectedZone.id}
+							zone={selectedZone.zone}
+							onzone={applyZoneCounts}
+						/>
 					{/key}
 				</div>
 			{/if}
@@ -314,7 +380,11 @@
 {/if}
 
 <!-- group modal -->
-<Modal title={editingGroup ? t('spec.editOf', t('dns.singular')) : t('dns.new')} bind:open={showGroupForm}>
+<Modal
+	title={editingGroup ? t('spec.editOf', t('dns.singular')) : t('dns.new')}
+	bind:open={showGroupForm}
+	dirty={groupFormGuard.dirty && !savingGroup}
+>
 	<div class="form">
 		<label><span>{t('dns.field.name')}</span><input bind:value={gName} placeholder="lab-dns" /></label>
 		<label>
@@ -333,7 +403,11 @@
 </Modal>
 
 <!-- zone modal -->
-<Modal title={editingZone ? t('dns.zone.edit') : t('dns.zone.new')} bind:open={showZoneForm}>
+<Modal
+	title={editingZone ? t('dns.zone.edit') : t('dns.zone.new')}
+	bind:open={showZoneForm}
+	dirty={zoneFormGuard.dirty && !savingZone}
+>
 	<div class="form">
 		<label><span>{t('dns.zone.field.zone')}</span><input bind:value={zName} placeholder="example.dn42 / 20.172.in-addr.arpa" /></label>
 		<p class="faint" style="font-size:0.8rem; margin:0">{t('dns.zone.soaHint')}</p>

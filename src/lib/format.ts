@@ -59,19 +59,9 @@ export function fmtDurationSecs(secs: number | null | undefined): string {
 	return t.d(Math.floor(hrs / 24));
 }
 
-// Agent liveness from the WS heartbeat's last-seen timestamp. The agent beats
-// every ~30s (heartbeat_interval_seconds), so we grade: online ≤ 75s (2.5×),
-// stale ≤ 5min, else offline. Null/absent (never heard from, or control server
-// restarted — liveness is in-memory) → offline.
-export type AgentLiveness = 'online' | 'stale' | 'offline';
-export function agentLiveness(lastSeen: string | null | undefined): AgentLiveness {
-	const d = parse(lastSeen);
-	if (!d) return 'offline';
-	const secs = (Date.now() - d.getTime()) / 1000;
-	if (secs <= 75) return 'online';
-	if (secs <= 300) return 'stale';
-	return 'offline';
-}
+// NOTE: agent liveness grading moved server-side (the 75s/300s thresholds are
+// coupled to the control server's heartbeat interval). Every node row now
+// carries a server-computed `liveness` field — see AgentLivenessFields.
 
 // Humanise a byte count to B/KB/MB/GB/… (1024-based). null/undefined → '—'.
 export function fmtBytes(n: number | null | undefined): string {

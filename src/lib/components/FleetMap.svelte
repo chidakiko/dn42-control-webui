@@ -7,9 +7,9 @@
 	import { api, ApiError, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
 	import { t } from '$lib/i18n.svelte';
-	import { relTime, agentLiveness } from '$lib/format';
+	import { relTime } from '$lib/format';
 	import type { NodeHealthValue, FleetLink, FleetOverviewNode } from '$lib/types';
-	import { resolveGeo, type ResolvedGeo } from '$lib/geo';
+	import { fromNodeGeo, type ResolvedGeo } from '$lib/geo';
 	import Icon, { type IconName } from '$lib/components/Icon.svelte';
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import Tooltip from '$lib/components/Tooltip.svelte';
@@ -30,12 +30,13 @@
 	// Worst-health ranking for a cluster's combined dot colour (higher = worse).
 	const SEV: Record<NodeHealthValue, number> = { down: 4, degraded: 3, stale: 2, unknown: 1, ok: 0 };
 
-	// A node's location comes from its `site` (city code) resolved against the geo
-	// registry → coords + country + DN42 region; the node's own `region` field wins
-	// when set. Unknown sites fall back to the region centre, or are left unlocated.
+	// A node's location arrives server-resolved on the overview row (`geo`: coords +
+	// city + country + DN42 region; the node's own `region` field already won during
+	// server-side resolution). Unknown sites fall back to the region centre, or are
+	// left unlocated. fromNodeGeo only adapts it for clustering/labels.
 	let geoOf = $derived.by(() => {
 		const m = new Map<string, ResolvedGeo>();
-		for (const n of nodes) m.set(n.node_id, resolveGeo(n.site, n.region));
+		for (const n of nodes) m.set(n.node_id, fromNodeGeo(n.geo, n.site));
 		return m;
 	});
 
@@ -829,7 +830,7 @@
 		n.desired_generation != null &&
 		n.observed_generation !== n.desired_generation}
 	{@const deg = degree.get(n.node_id) ?? 0}
-	{@const lv = n.last_heartbeat_at ? agentLiveness(n.last_heartbeat_at) : null}
+	{@const lv = n.last_heartbeat_at ? n.liveness : null}
 	<a
 		href="/nodes/{n.node_id}"
 		class="row"
@@ -942,7 +943,7 @@
 		gap: 0.3rem;
 		border: 1px solid var(--border);
 		background: var(--bg);
-		border-radius: 999px;
+		border-radius: var(--radius-sm);
 		padding: 0.12rem 0.55rem;
 		font-size: 0.76rem;
 		font-variant-numeric: tabular-nums;
@@ -1041,7 +1042,7 @@
 		font-weight: 700;
 		color: var(--text-faint);
 		background: var(--bg-elev-2);
-		border-radius: 999px;
+		border-radius: var(--radius-sm);
 		padding: 0 0.4rem;
 		font-variant-numeric: tabular-nums;
 	}

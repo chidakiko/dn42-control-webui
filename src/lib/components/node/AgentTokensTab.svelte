@@ -2,11 +2,14 @@
 	import { onMount } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
+	import { confirmDialog } from '$lib/confirm.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
 	import { fmtTime } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import type { AgentTokenOut } from '$lib/types';
 	import Modal from './../Modal.svelte';
+	import InlineBanner from './../InlineBanner.svelte';
 	import SecretReveal from './../SecretReveal.svelte';
 	import SkeletonTable from './../SkeletonTable.svelte';
 
@@ -20,11 +23,15 @@
 	let ttl = $state('');
 	let customAgentId = $state('');
 	let saving = $state(false);
+	const issueGuard = dirtyGuard(
+		() => showIssue,
+		() => [ttl, customAgentId]
+	);
 
 	let secret = $state<string | null>(null);
 
 	async function refresh() {
-		loading = true;
+		if (items.length === 0) loading = true;
 		err = '';
 		try {
 			items = await api.listAgentTokens(nodeId);
@@ -63,7 +70,8 @@
 	}
 
 	async function rotate(tok: AgentTokenOut) {
-		if (!confirm(t('tok.confirmRotate', tok.token))) return;
+		if (!(await confirmDialog({ message: t('tok.confirmRotate', tok.token), danger: true })))
+			return;
 		try {
 			const nt = await api.rotateAgentToken(tok.token);
 			secret = nt.token;
@@ -74,7 +82,8 @@
 	}
 
 	async function revoke(tok: AgentTokenOut) {
-		if (!confirm(t('tok.confirmRevoke', tok.token))) return;
+		if (!(await confirmDialog({ message: t('tok.confirmRevoke', tok.token), danger: true })))
+			return;
 		try {
 			await api.revokeAgentToken(tok.token);
 			toast.success(t('tok.revokedMsg'));
@@ -93,6 +102,7 @@
 	</div>
 </div>
 
+{#if err && items.length > 0}<InlineBanner detail={err} />{/if}
 {#if loading && items.length === 0}
 	<SkeletonTable
 		headers={[
@@ -105,7 +115,7 @@
 		]}
 		cols={['8rem', '6rem', '4rem', '6rem', '6rem', '3rem']}
 	/>
-{:else if err}
+{:else if err && items.length === 0}
 	<p class="error-text">{err}</p>
 {:else if items.length === 0}
 	<div class="empty">{t('tok.empty')}</div>
@@ -137,7 +147,7 @@
 	</table>
 {/if}
 
-<Modal title={t('tok.issueTitle')} bind:open={showIssue}>
+<Modal title={t('tok.issueTitle')} bind:open={showIssue} dirty={issueGuard.dirty && !saving}>
 	<label class="field"><span>{t('tok.f.agentId')}</span><input bind:value={customAgentId} /></label>
 	<label class="field"
 		><span>{t('tok.f.ttl')}</span><input bind:value={ttl} /></label

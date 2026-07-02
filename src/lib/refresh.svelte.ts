@@ -1,8 +1,9 @@
-// Global auto-refresh ticker. A single interval bumps `tick`; live pages run
-// their load function inside an `$effect` that reads `autoRefresh.tick`, so one
-// timer drives every subscribed page. Interval is user-selectable and persisted.
-// Polling pauses while the tab is hidden to avoid pointless background fetches.
+// Global auto-refresh ticker. A single interval bumps `tick`; live pages
+// subscribe via pollEffect() below, so one timer drives every page. Interval is
+// user-selectable and persisted. Polling pauses while the tab is hidden to
+// avoid pointless background fetches.
 
+import { untrack } from 'svelte';
 import { browser } from '$app/environment';
 
 const KEY = 'dn42.refreshMs';
@@ -58,3 +59,29 @@ class RefreshState {
 export const autoRefresh = new RefreshState();
 
 if (browser) autoRefresh.start();
+
+/**
+ * Subscribe a loader to the auto-refresh tick. Call during component init
+ * (wraps an $effect). Runs immediately, then on every tick and whenever
+ * `keys()` changes value.
+ *
+ * A tick that fires while the previous run is still in flight is SKIPPED — no
+ * overlapping GETs racing last-writer-wins on a slow server. A key change
+ * (e.g. navigating to another node) always runs, even mid-flight. Direct
+ * `load()` calls after mutations bypass this wrapper and stay awaitable.
+ */
+export function pollEffect(load: () => Promise<unknown> | void, keys?: () => unknown) {
+	let busy = false;
+	let lastKey: unknown = Symbol('initial');
+	$effect(() => {
+		autoRefresh.tick;
+		const k = keys?.();
+		untrack(() => {
+			const keyChanged = k !== lastKey;
+			lastKey = k;
+			if (busy && !keyChanged) return;
+			busy = true;
+			void Promise.resolve(load()).finally(() => (busy = false));
+		});
+	});
+}

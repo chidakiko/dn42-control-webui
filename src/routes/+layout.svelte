@@ -13,6 +13,7 @@
 	import Tooltip from '$lib/components/Tooltip.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import Toaster from '$lib/components/Toaster.svelte';
+	import ConfirmHost from '$lib/components/ConfirmHost.svelte';
 	import Logo from '$lib/components/Logo.svelte';
 	import Icon, { type IconName } from '$lib/components/Icon.svelte';
 
@@ -113,7 +114,30 @@
 		if (href === '/') return page.url.pathname === '/';
 		return page.url.pathname.startsWith(href);
 	}
+
+	// GitHub-style `/` shortcut: focus the current page's search box (if any),
+	// unless the user is already typing in a field.
+	function onKeydown(e: KeyboardEvent) {
+		if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+		const el = e.target as HTMLElement | null;
+		if (
+			el &&
+			(el.tagName === 'INPUT' ||
+				el.tagName === 'TEXTAREA' ||
+				el.tagName === 'SELECT' ||
+				el.isContentEditable)
+		)
+			return;
+		const search = document.querySelector<HTMLInputElement>('input.search');
+		if (search) {
+			e.preventDefault();
+			search.focus();
+			search.select();
+		}
+	}
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
@@ -121,6 +145,7 @@
 </svelte:head>
 
 <Toaster />
+<ConfirmHost />
 
 {#if isLogin || !auth.isAuthed}
 	{@render children()}
@@ -455,20 +480,7 @@
 		height: 7px;
 		border-radius: 50%;
 		background: var(--ok);
-		box-shadow: 0 0 0 0 rgba(46, 160, 67, 0.6);
-		animation: pulse 2s infinite;
 		flex: none;
-	}
-	@keyframes pulse {
-		0% {
-			box-shadow: 0 0 0 0 rgba(46, 160, 67, 0.5);
-		}
-		70% {
-			box-shadow: 0 0 0 6px rgba(46, 160, 67, 0);
-		}
-		100% {
-			box-shadow: 0 0 0 0 rgba(46, 160, 67, 0);
-		}
 	}
 	.api-base {
 		font-size: 0.7rem;
@@ -500,8 +512,7 @@
 		gap: 1rem;
 		min-height: 56px;
 		padding: 0.5rem 2rem;
-		background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
-		backdrop-filter: blur(8px);
+		background: var(--bg-elev);
 		border-bottom: 1px solid var(--border);
 	}
 	/* left side: breadcrumb + a small info icon whose tooltip holds the page description */

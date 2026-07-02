@@ -71,13 +71,19 @@ export function withAlpha(color: string, alpha: number): string {
 	return norm;
 }
 
-/** Theme-derived colours for axes / gridlines / tooltips. */
+/** Theme-derived colours for axes / gridlines / tooltips.
+ * Grid/label follow the Radar alpha system — text colour at 10% (grid),
+ * 15% (dashed grid), 20% (axis line), 65% (tick labels) — computed here
+ * from --text because canvas can't parse the CSS color-mix() tokens. */
 export function chartTheme() {
+	const text = cssVar('--text') || '#888';
 	return {
-		grid: withAlpha(cssVar('--border') || '#888', 0.6),
-		tick: cssVar('--text-faint') || '#888',
+		grid: withAlpha(text, 0.1),
+		gridDash: withAlpha(text, 0.15),
+		axisLine: withAlpha(text, 0.2),
+		tick: withAlpha(text, 0.65),
 		tooltipBg: cssVar('--bg-elev') || '#fff',
-		tooltipText: cssVar('--text') || '#000',
+		tooltipText: text,
 		tooltipBorder: cssVar('--border') || '#ccc'
 	};
 }

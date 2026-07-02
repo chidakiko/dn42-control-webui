@@ -1,26 +1,49 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
-	import { autoRefresh } from '$lib/refresh.svelte';
-	import type { NodeIn, NodeOut, AgentLivenessFields } from '$lib/types';
+	import { pollEffect } from '$lib/refresh.svelte';
+	import { urlParam } from '$lib/urlstate.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
+	import { createSort, cmp, matches } from '$lib/table.svelte';
+	import SortTh from '$lib/components/SortTh.svelte';
+	import type { NodeIn, UiNodeRow } from '$lib/types';
 	import { toast } from '$lib/toast.svelte';
-	import { fmtTime, agentLiveness } from '$lib/format';
+	import { fmtTime } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import Modal from '$lib/components/Modal.svelte';
+	import InlineBanner from '$lib/components/InlineBanner.svelte';
 	import JsonEditor from '$lib/components/JsonEditor.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import Skeleton from '$lib/components/Skeleton.svelte';
 	import { fade } from 'svelte/transition';
 
-	let nodes = $state<NodeOut[]>([]);
+	// GET /ui/nodes: rows arrive with liveness / agent version / health already
+	// joined server-side — no more listNodes + fleetOverview client-side merge.
+	let nodes = $state<UiNodeRow[]>([]);
 	let loading = $state(true);
 	let error = $state('');
 
-	// Agent liveness/version isn't on NodeOut — join it from the fleet overview
-	// (one call for the whole fleet), keyed by node_id. Best-effort: the list still
-	// renders if the overview fetch fails.
 	const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'down' } as const;
-	let liveBy = $state<Record<string, AgentLivenessFields>>({});
+
+	// Client-side search (?q=, shareable) + column sort — the fleet is far below
+	// the ~500-row threshold where this would need to move server-side.
+	const qParam = urlParam('q');
+	const sort = createSort('node_id');
+	const SORT_FIELDS: Record<string, (n: UiNodeRow) => string | number | null> = {
+		node_id: (n) => n.node_id,
+		asn: (n) => n.asn,
+		site: (n) => n.site,
+		lifecycle: (n) => n.lifecycle,
+		agent_version: (n) => n.agent_version,
+		current_generation: (n) => n.current_generation,
+		updated_at: (n) => n.updated_at
+	};
+	let view = $derived.by(() => {
+		const rows = nodes.filter((n) =>
+			matches(qParam.value, n.node_id, n.asn, n.router_id, n.site, n.lifecycle, n.agent_version)
+		);
+		const get = SORT_FIELDS[sort.key];
+		return get ? [...rows].sort((a, b) => sort.dir * cmp(get(a), get(b))) : rows;
+	});
 
 	let showCreate = $state(false);
 	let saving = $state(false);
@@ -39,37 +62,23 @@
 	});
 	let baseTemplate = $state('{}');
 	let baseEditor: JsonEditor;
+	const formGuard = dirtyGuard(
+		() => showCreate,
+		() => [f, baseTemplate]
+	);
 
 	async function load() {
-		loading = true;
+		if (nodes.length === 0) loading = true;
 		error = '';
 		try {
-			nodes = await api.listNodes();
+			nodes = (await api.listUiNodes()).nodes;
 		} catch (err) {
 			error = errorMessage(err);
 		} finally {
 			loading = false;
 		}
-		try {
-			const ov = await api.fleetOverview();
-			liveBy = Object.fromEntries(
-				ov.nodes.map((n) => [
-					n.node_id,
-					{
-						agent_version: n.agent_version,
-						last_heartbeat_at: n.last_heartbeat_at,
-						agent_up_to_date: n.agent_up_to_date
-					}
-				])
-			);
-		} catch {
-			/* liveness is a best-effort overlay */
-		}
 	}
-	$effect(() => {
-		autoRefresh.tick;
-		untrack(() => load());
-	});
+	pollEffect(() => load());
 
 	function resetForm() {
 		f = {
@@ -131,11 +140,18 @@
 
 <div class="page-head" style="justify-content:flex-end">
 	<div class="ph-actions">
+		<input
+			class="search"
+			type="search"
+			placeholder={t('common.search')}
+			value={qParam.value}
+			oninput={(e) => (qParam.value = e.currentTarget.value)}
+		/>
 		<button class="btn primary sm" onclick={() => (showCreate = true)}>+ {t('nodes.new')}</button>
 	</div>
 </div>
 
-{#if error}
+{#if error && nodes.length === 0}
 	<div class="card"><p class="error-text">{error}</p></div>
 {:else if !loading && nodes.length === 0}
 	<div class="card" style="padding:0" in:fade={{ duration: 150 }}>
@@ -148,18 +164,19 @@
 		/>
 	</div>
 {:else}
+	{#if error}<InlineBanner detail={error} />{/if}
 	<div class="card" style="padding:0">
 		<table>
 			<thead>
 				<tr>
-					<th>{t('nodes.col.id')}</th>
-					<th>{t('nodes.col.asn')}</th>
+					<SortTh label={t('nodes.col.id')} sortKey="node_id" {sort} />
+					<SortTh label={t('nodes.col.asn')} sortKey="asn" {sort} />
 					<th>{t('nodes.col.routerId')}</th>
-					<th>{t('nodes.col.site')}</th>
-					<th>{t('nodes.col.lifecycle')}</th>
-					<th>{t('arel.col.version')}</th>
-					<th>{t('nodes.col.gen')}</th>
-					<th>{t('nodes.col.updated')}</th>
+					<SortTh label={t('nodes.col.site')} sortKey="site" {sort} />
+					<SortTh label={t('nodes.col.lifecycle')} sortKey="lifecycle" {sort} />
+					<SortTh label={t('arel.col.version')} sortKey="agent_version" {sort} />
+					<SortTh label={t('nodes.col.gen')} sortKey="current_generation" {sort} />
+					<SortTh label={t('nodes.col.updated')} sortKey="updated_at" {sort} />
 				</tr>
 			</thead>
 			<tbody>
@@ -177,9 +194,8 @@
 						</tr>
 					{/each}
 				{:else}
-					{#each nodes as n (n.node_id)}
-						{@const live = liveBy[n.node_id]}
-						{@const ls = live ? agentLiveness(live.last_heartbeat_at) : null}
+					{#each view as n (n.node_id)}
+						{@const ls = n.last_heartbeat_at ? n.liveness : null}
 						<tr>
 							<td>
 								<a href="/nodes/{n.node_id}" class="id-cell mono">
@@ -195,12 +211,14 @@
 									<span class="dot"></span>{n.lifecycle}
 								</span>
 							</td>
-							<td class="mono faint" class:behind={live?.agent_up_to_date === false}>
-								{live?.agent_version ?? '—'}
+							<td class="mono faint" class:behind={n.agent_up_to_date === false}>
+								{n.agent_version ?? '—'}
 							</td>
 							<td class="mono">{n.current_generation}</td>
 							<td class="faint">{fmtTime(n.updated_at)}</td>
 						</tr>
+					{:else}
+						<tr><td colspan="8" class="empty">{t('common.noMatch')}</td></tr>
 					{/each}
 				{/if}
 			</tbody>
@@ -208,7 +226,7 @@
 	</div>
 {/if}
 
-<Modal title={t('nodes.create')} bind:open={showCreate}>
+<Modal title={t('nodes.create')} bind:open={showCreate} dirty={formGuard.dirty && !saving}>
 	<div class="row">
 		<label class="field"><span>{t('nodes.col.id')} *</span><input bind:value={f.node_id} placeholder="hkg2-edge" /></label>
 		<label class="field"><span>{t('nodes.col.asn')} *</span><input bind:value={f.asn} placeholder="4242420000" /></label>

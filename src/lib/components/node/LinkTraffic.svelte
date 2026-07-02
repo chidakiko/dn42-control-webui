@@ -3,39 +3,42 @@
 	// (Δbytes / Δt from successive snapshots, counter resets clamped) and returns a
 	// tiny points array — the browser no longer pulls 60 full snapshots and deltas
 	// them. Feeds the shared TrendChart (the "traffic" template).
-	import { untrack } from 'svelte';
 	import { api } from '$lib/api';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	import { pollEffect } from '$lib/refresh.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import { fmtBytes } from '$lib/format';
 	import TrendChart from '../charts/TrendChart.svelte';
+	import ChartLegend from '../charts/ChartLegend.svelte';
 	import type { TrafficPoint } from '$lib/types';
 
 	let { nodeId }: { nodeId: string } = $props();
 
 	let points = $state<TrafficPoint[]>([]);
+	// previous-window overlay (?compare=1) — same bucket grid, align by index
+	let prev = $state<TrafficPoint[]>([]);
 	let loaded = $state(false);
 
 	async function load() {
 		try {
-			const r = await api.nodeTraffic(nodeId, 120);
+			const r = await api.nodeTraffic(nodeId, { limit: 120, compare: true });
 			points = r.points;
+			prev = r.points_previous ?? [];
 		} catch {
 			/* best-effort overview widget */
 		} finally {
 			loaded = true;
 		}
 	}
-	$effect(() => {
-		autoRefresh.tick;
-		nodeId; // reload when the node changes
-		untrack(() => load());
-	});
+	pollEffect(
+		() => load(),
+		() => nodeId
+	);
 
 	let timestamps = $derived(points.map((p) => p.captured_at));
 	let rxRate = $derived(points.map((p) => p.rx_bytes_per_sec));
 	let txRate = $derived(points.map((p) => p.tx_bytes_per_sec));
 	let hasData = $derived(points.length > 1);
+	let hasPrev = $derived(prev.some((p) => p.rx_bytes_per_sec != null));
 	const fmtRate = (v: number) => fmtBytes(v) + '/s';
 </script>
 
@@ -43,10 +46,13 @@
 	<div class="traffic">
 		<div class="th">
 			<h4>{t('traffic.title')}</h4>
-			<div class="legend">
-				<span><span class="d rx"></span>{t('traffic.rx')}</span>
-				<span><span class="d tx"></span>{t('traffic.tx')}</span>
-			</div>
+			<ChartLegend
+				items={[
+					{ label: t('traffic.rx'), color: 'var(--c-data-1)' },
+					{ label: t('traffic.tx'), color: 'var(--c-data-2)' },
+					...(hasPrev ? [{ label: t('chart.prevPeriod'), color: 'var(--text-faint)', dash: true }] : [])
+				]}
+			/>
 		</div>
 		<TrendChart
 			{timestamps}
@@ -54,8 +60,18 @@
 			zeroBased
 			format={fmtRate}
 			series={[
-				{ label: t('traffic.rx'), color: 'var(--ok)', values: rxRate, fill: true },
-				{ label: t('traffic.tx'), color: 'var(--accent)', values: txRate }
+				{ label: t('traffic.rx'), color: 'var(--c-data-1)', values: rxRate, fill: true },
+				{ label: t('traffic.tx'), color: 'var(--c-data-2)', values: txRate },
+				...(hasPrev
+					? [
+							{
+								label: t('chart.prevPeriod'),
+								color: 'var(--c-data-1)',
+								dash: true,
+								values: prev.map((p) => p.rx_bytes_per_sec)
+							}
+						]
+					: [])
 			]}
 		/>
 	</div>
@@ -74,28 +90,5 @@
 	.th h4 {
 		margin: 0;
 		font-size: 0.95rem;
-	}
-	.legend {
-		display: flex;
-		gap: 0.85rem;
-		font-size: 0.78rem;
-		color: var(--text-dim);
-	}
-	.legend span {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.3rem;
-	}
-	.d {
-		width: 9px;
-		height: 9px;
-		border-radius: 2px;
-		display: inline-block;
-	}
-	.d.rx {
-		background: var(--ok);
-	}
-	.d.tx {
-		background: var(--accent);
 	}
 </style>

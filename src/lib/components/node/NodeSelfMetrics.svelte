@@ -1,59 +1,31 @@
 <script lang="ts">
 	// Mini stat cards for an agent's *self*-observation: process CPU%, RSS, and the
 	// duration of its background loops (routing collection / WG reresolve), plus
-	// reconcile failure counts. Current values come from the node's latest snapshot
-	// (last_snapshot.self_metrics); sparklines are derived from recent snapshot
-	// events. Renders nothing when the agent doesn't report self-metrics (old agent).
-	import { api } from '$lib/api';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	// reconcile failure counts. Series come pre-distilled from /ui/nodes/{id}/trends
+	// (one fetch in the parent page, shared with NodeTrends), already chronological.
+	// Renders nothing when the agent doesn't report self-metrics (old agent).
 	import { t } from '$lib/i18n.svelte';
 	import Sparkline from '../charts/Sparkline.svelte';
 	import Skeleton from '../Skeleton.svelte';
 	import { fade } from 'svelte/transition';
-	import type { AgentSelfMetrics, StatusEvent } from '$lib/types';
+	import type { AgentSelfMetrics, NodeTrendsOut } from '$lib/types';
 
-	// `current` may be piped from the parent's /overview fetch; if omitted we
-	// self-fetch nodeHealth. The sparkline history always comes from status-events.
+	// `current` may be piped from the parent's /overview fetch (freshest value);
+	// otherwise the trends payload's own current is used.
 	let {
-		nodeId,
+		trends,
 		current: pipedCurrent
-	}: { nodeId: string; current?: AgentSelfMetrics | null } = $props();
+	}: { trends: NodeTrendsOut | null; current?: AgentSelfMetrics | null } = $props();
 
-	let usePiped = $derived(pipedCurrent !== undefined);
-	let fetchedCurrent = $state<AgentSelfMetrics | null>(null);
-	let current = $derived(usePiped ? (pipedCurrent ?? null) : fetchedCurrent);
-	let snaps = $state<StatusEvent[]>([]);
-	let loaded = $state(false);
+	let loaded = $derived(trends !== null);
+	let current = $derived(
+		pipedCurrent !== undefined ? pipedCurrent : (trends?.self_metrics.current ?? null)
+	);
 
-	function selfMetricsOf(payload: Record<string, unknown> | null | undefined): AgentSelfMetrics | null {
-		const sm = (payload as { self_metrics?: AgentSelfMetrics } | null | undefined)?.self_metrics;
-		return sm ?? null;
-	}
-
-	async function load() {
-		try {
-			const ev = await api.statusEvents(nodeId, 'snapshot', 50);
-			snaps = ev.events;
-			if (!usePiped) {
-				const health = await api.nodeHealth(nodeId);
-				fetchedCurrent = selfMetricsOf(health.last_snapshot);
-			}
-		} catch {
-			/* overview is best-effort */
-		} finally {
-			loaded = true;
-		}
-	}
-	$effect(() => {
-		autoRefresh.tick;
-		load();
-	});
-
-	// snapshot events arrive newest-first; reverse for chronological sparklines.
-	let series = $derived([...snaps].reverse().map((e) => selfMetricsOf(e.payload)));
-	let cpuSeries = $derived(series.map((m) => m?.cpu_percent ?? 0));
-	let rssSeries = $derived(series.map((m) => m?.rss_mb ?? 0));
-	let routingSeries = $derived(series.map((m) => m?.last_routing_collect_seconds ?? 0));
+	let series = $derived(trends?.self_metrics.series ?? []);
+	let cpuSeries = $derived(series.map((m) => m.cpu_percent ?? 0));
+	let rssSeries = $derived(series.map((m) => m.rss_mb ?? 0));
+	let routingSeries = $derived(series.map((m) => m.last_routing_collect_seconds ?? 0));
 
 	const fmt = (v: number | null | undefined, digits = 0): string =>
 		v === null || v === undefined ? '—' : v.toFixed(digits);
@@ -96,7 +68,7 @@
 						<span class="val">{fmt(current.rss_mb)}<span class="pct">MB</span></span>
 					</div>
 					{#if rssSeries.length > 1}
-						<Sparkline values={rssSeries} width={150} height={30} color="var(--c-accent)" interactive format={(v) => v + ' MB'} />
+						<Sparkline values={rssSeries} width={150} height={30} color="var(--c-data-1)" interactive format={(v) => v + ' MB'} />
 					{/if}
 				</div>
 			{/if}
@@ -108,7 +80,7 @@
 						<span class="val">{fmt(current.last_routing_collect_seconds, 2)}<span class="pct">s</span></span>
 					</div>
 					{#if routingSeries.length > 1}
-						<Sparkline values={routingSeries} width={150} height={30} color="var(--c-accent)" interactive format={(v) => v + ' s'} />
+						<Sparkline values={routingSeries} width={150} height={30} color="var(--c-data-1)" interactive format={(v) => v + ' s'} />
 					{/if}
 				</div>
 			{/if}

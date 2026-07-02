@@ -69,7 +69,7 @@
 		font-size: 0.72rem;
 		font-weight: 600;
 		padding: 0.12rem 0.5rem;
-		border-radius: 999px;
+		border-radius: var(--radius-sm);
 	}
 	.cnt.crit {
 		background: color-mix(in srgb, var(--bad) 15%, transparent);
@@ -111,7 +111,7 @@
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		padding: 0.1rem 0.42rem;
-		border-radius: 999px;
+		border-radius: var(--radius-sm);
 	}
 	.sev.crit {
 		background: color-mix(in srgb, var(--bad) 16%, transparent);

@@ -8,7 +8,7 @@
 	let {
 		value,
 		max,
-		color = 'var(--c-accent)',
+		color = 'var(--c-data-1)',
 		showValue = true
 	}: { value: number; max: number; color?: string; showValue?: boolean } = $props();
 

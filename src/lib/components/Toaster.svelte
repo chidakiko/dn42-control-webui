@@ -4,7 +4,8 @@
 
 <div class="toaster">
 	{#each toast.items as t (t.id)}
-		<div class="toast {t.kind}" role="status">
+		<!-- errors are assertive so screen readers announce them immediately -->
+		<div class="toast {t.kind}" role={t.kind === 'error' ? 'alert' : 'status'}>
 			<span>{t.message}</span>
 			<button class="x" aria-label="Dismiss" onclick={() => toast.dismiss(t.id)}>×</button>
 		</div>

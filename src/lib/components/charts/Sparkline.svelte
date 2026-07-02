@@ -9,7 +9,7 @@
 		values,
 		width = 120,
 		height = 34,
-		color = 'var(--c-accent)',
+		color = 'var(--c-data-1)',
 		fill = true,
 		strokeWidth = 1.5,
 		smooth = true,

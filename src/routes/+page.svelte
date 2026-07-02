@@ -1,42 +1,73 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import type {
 		FleetOverview,
+		FleetRoutingOverview,
 		TrafficPoint,
 		FleetTrafficBreakdown,
 		PeeringIssue
 	} from '$lib/types';
 	import FleetRouting from '$lib/components/FleetRouting.svelte';
-	import { fmtBytes, agentLiveness } from '$lib/format';
-	import { autoRefresh } from '$lib/refresh.svelte';
-	import { t } from '$lib/i18n.svelte';
+	import { fmtBytes } from '$lib/format';
+	import { pollEffect } from '$lib/refresh.svelte';
+	import { urlParam } from '$lib/urlstate.svelte';
+	import { t, locale } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import Widget from '$lib/components/Widget.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import InlineBanner from '$lib/components/InlineBanner.svelte';
 	import FleetMap from '$lib/components/FleetMap.svelte';
 	import TrendChart from '$lib/components/charts/TrendChart.svelte';
+	import ChartLegend from '$lib/components/charts/ChartLegend.svelte';
 	import Skeleton from '$lib/components/Skeleton.svelte';
 
 	// --- real fleet WG throughput (rx/tx bytes/s) from /fleet/traffic ---
-	// themed palette (consistent with the routing board above): rx = accent, tx = ok-green
-	const RX_COLOR = 'var(--c-accent)';
-	const TX_COLOR = 'var(--c-ok)';
+	// quantity series → data palette (semantic ok/bad stay reserved for status)
+	const RX_COLOR = 'var(--c-data-1)';
+	const TX_COLOR = 'var(--c-data-2)';
 	const fmtRate = (v: number) => fmtBytes(v) + '/s';
 
 	let fleetTrafficPts = $state<TrafficPoint[]>([]);
-	let hasTraffic = $derived(fleetTrafficPts.length > 1);
+	// previous-window overlay (?compare=1), same bucket grid — align by index
+	let fleetTrafficPrev = $state<TrafficPoint[]>([]);
+	// range-grid buckets with no data are null; "has traffic" = any real sample
+	let hasTraffic = $derived(
+		fleetTrafficPts.some((p) => p.rx_bytes_per_sec != null || p.tx_bytes_per_sec != null)
+	);
+	let hasPrev = $derived(fleetTrafficPrev.some((p) => p.rx_bytes_per_sec != null));
 	let trafficSeries = $derived([
 		{ label: t('traffic.rx'), color: RX_COLOR, values: fleetTrafficPts.map((p) => p.rx_bytes_per_sec), fill: true },
-		{ label: t('traffic.tx'), color: TX_COLOR, values: fleetTrafficPts.map((p) => p.tx_bytes_per_sec) }
+		{ label: t('traffic.tx'), color: TX_COLOR, values: fleetTrafficPts.map((p) => p.tx_bytes_per_sec) },
+		...(hasPrev
+			? [
+					{
+						label: t('chart.prevPeriod'),
+						color: RX_COLOR,
+						dash: true,
+						values: fleetTrafficPrev.map((p) => p.rx_bytes_per_sec)
+					}
+				]
+			: [])
 	]);
+	// card-level range control — drives ?range= on /ui/dashboard (fixed grid,
+	// ≤200 buckets, server picks the bucket size). Lives in the querystring
+	// (contract 1): refresh/back/share reproduce the same window.
+	const TRAF_RANGES = ['24h', '7d', '30d'] as const;
+	type TrafRange = (typeof TRAF_RANGES)[number];
+	const rangeParam = urlParam('range', '24h', { push: true });
+	let trafRange = $derived(
+		(TRAF_RANGES as readonly string[]).includes(rangeParam.value)
+			? (rangeParam.value as TrafRange)
+			: '24h'
+	);
 	let trafficStamps = $derived(fleetTrafficPts.map((p) => p.captured_at));
-	let lastPt = $derived(fleetTrafficPts.at(-1));
-	let peakRx = $derived(fleetTrafficPts.reduce((m, p) => Math.max(m, p.rx_bytes_per_sec), 0));
-	let peakTx = $derived(fleetTrafficPts.reduce((m, p) => Math.max(m, p.tx_bytes_per_sec), 0));
+	// last bucket with data (the trailing bucket of a live grid is often empty)
+	let lastPt = $derived([...fleetTrafficPts].reverse().find((p) => p.rx_bytes_per_sec != null));
+	let peakRx = $derived(fleetTrafficPts.reduce((m, p) => Math.max(m, p.rx_bytes_per_sec ?? 0), 0));
+	let peakTx = $derived(fleetTrafficPts.reduce((m, p) => Math.max(m, p.tx_bytes_per_sec ?? 0), 0));
 
-	// "loaded once" flags for the traffic widgets. They load AFTER `data` (a separate,
-	// later fetch), so skeletons must key off these — not `data` — or the EmptyState
-	// flashes in the window where data has arrived but traffic hasn't.
+	// "loaded once" flags for the traffic widgets: keyed off the first /ui/dashboard
+	// arrival (not `data`), so the EmptyState never flashes before the payload lands.
 	let trafficLoaded = $state(false);
 	let breakdownLoaded = $state(false);
 
@@ -71,97 +102,90 @@
 	let peeringLoaded = $state(false);
 
 	let data = $state<FleetOverview | null>(null);
+	let routing = $state<FleetRoutingOverview | null>(null);
 	let loading = $state(true);
 	let error = $state('');
 
+	// "Updated HH:MM:SS" stamp for the widget footers — the SERVER's aggregation
+	// time (generated_at; cache-generation time on TTL hits), not client fetch time.
+	let lastUpdated = $state<Date | null>(null);
+	let asofLabel = $derived(
+		lastUpdated ? `${t('common.updatedAt')} ${lastUpdated.toLocaleTimeString(locale.tag)}` : ''
+	);
+
+	// ONE request per refresh tick: /ui/dashboard bundles overview + traffic +
+	// breakdown + peering issues + the routing board (server caches ~3s).
+	// range rides the card control; compare=1 brings the previous-window overlay;
+	// origins_top=100 fills the Radar top-origins table's 5 pages of 20.
 	async function load() {
 		if (!data) loading = true; // spinner only on first load; polls update silently
 		error = '';
 		try {
-			data = await api.fleetOverview();
+			const d = await api.dashboard({ range: trafRange, compare: true, originsTop: 100 });
+			data = d.overview;
+			fleetTrafficPts = d.traffic.points;
+			fleetTrafficPrev = d.traffic.points_previous ?? [];
+			breakdown = d.traffic_breakdown;
+			peeringIssues = d.peering_issues;
+			routing = d.routing;
+			trafficLoaded = true;
+			breakdownLoaded = true;
+			peeringLoaded = true;
+			lastUpdated = new Date(d.generated_at);
 		} catch (err) {
 			error = errorMessage(err);
 		} finally {
 			loading = false;
 		}
-		try {
-			fleetTrafficPts = (await api.fleetTraffic()).points;
-		} catch {
-			fleetTrafficPts = [];
-		} finally {
-			trafficLoaded = true;
-		}
-		try {
-			breakdown = await api.fleetTrafficBreakdown();
-		} catch {
-			breakdown = null;
-		} finally {
-			breakdownLoaded = true;
-		}
-		try {
-			peeringIssues = (await api.fleetPeeringIssues()).issues;
-		} catch {
-			peeringIssues = [];
-		} finally {
-			peeringLoaded = true;
-		}
 	}
 
-	$effect(() => {
-		autoRefresh.tick;
-		untrack(() => load());
-	});
+	// reload on tick + when the range control changes
+	pollEffect(
+		() => load(),
+		() => trafRange
+	);
 
 	let total = $derived(data ? data.nodes.length : 0);
 	let okCount = $derived(data ? (data.summary.ok ?? 0) : 0);
-	// Heartbeat presence (primary liveness) + version compliance, both aggregated
-	// client-side from the fleet overview rows.
-	let onlineCount = $derived(
-		data ? data.nodes.filter((n) => agentLiveness(n.last_heartbeat_at) === 'online').length : 0
-	);
-	let behindCount = $derived(
-		data ? data.nodes.filter((n) => n.agent_up_to_date === false).length : 0
-	);
+	// Liveness + version compliance are aggregated server-side now
+	// (agent_summary is a top-level field — its "stale" would collide with the
+	// health summary's "stale" if merged).
+	let onlineCount = $derived(data?.agent_summary.online ?? 0);
+	let behindCount = $derived(data?.agent_summary.agents_behind ?? 0);
 	let targetVer = $derived(data?.agent_target_version ?? null);
 </script>
 
-{#if error}
+{#if error && !data}
 	<div class="card"><p class="error-text">{error}</p></div>
 {:else if data && data.nodes.length === 0}
 	<div class="card" style="padding:0">
 		<EmptyState icon="nodes" title={t('dash.empty')} hint={t('dash.subtitle')} />
 	</div>
 {:else}
-	<!-- topology — header is static and always rendered; only the map area is a
-	     skeleton until data, so the page frame never shifts on load. -->
-	<div class="page-head topo-head">
-		<div>
-			<div class="ph-title">
-				<Icon name="nodes" size={20} />
-				<h2 style="margin:0; font-size:1.15rem">{t('dash.topology')}</h2>
-			</div>
-			<p class="ph-sub">{t('dash.topologySub')}</p>
-		</div>
-		{#if data}
-			<div class="kpis">
-				<span class="kpi"><strong>{okCount}/{total}</strong> {t('health.ok')}</span>
-				<span class="kpi"><strong>{onlineCount}/{total}</strong> {t('live.online')}</span>
-				{#if targetVer}
-					<a class="kpi ver-kpi" href="/agent-releases" class:warn={behindCount > 0}>
-						<span class="mono">{targetVer}</span>
-						{#if behindCount > 0}
-							· <strong class="bad-num">{behindCount}</strong> {t('arel.behind')}
-						{:else}
-							· {t('arel.uptodate')}
-						{/if}
-					</a>
-				{/if}
-			</div>
-		{:else}
-			<Skeleton w="64px" h="1.05rem" />
-		{/if}
-	</div>
-	<div class="card">
+	{#if error}<InlineBanner detail={error} />{/if}
+	<!-- topology — Widget header is static and always rendered; only the map area
+	     is a skeleton until data, so the page frame never shifts on load. -->
+	<Widget title={t('dash.topology')} sub={t('dash.topologySub')} asof={asofLabel}>
+		{#snippet controls()}
+			{#if data}
+				<div class="kpis">
+					<span class="kpi"><strong>{okCount}/{total}</strong> {t('health.ok')}</span>
+					<span class="kpi"><strong>{onlineCount}/{total}</strong> {t('live.online')}</span>
+					{#if targetVer}
+						<a class="kpi ver-kpi" href="/agent-releases" class:warn={behindCount > 0}>
+							<span class="mono">{targetVer}</span>
+							{#if behindCount > 0}
+								· <strong class="bad-num">{behindCount}</strong> {t('arel.behind')}
+							{:else}
+								· {t('arel.uptodate')}
+							{/if}
+						</a>
+					{/if}
+				</div>
+			{:else}
+				<Skeleton w="64px" h="1.05rem" />
+			{/if}
+		{/snippet}
 		{#if data}
 			<FleetMap nodes={data.nodes} links={data.links} />
 		{:else}
@@ -175,23 +199,16 @@
 				</div>
 			</div>
 		{/if}
-	</div>
+	</Widget>
 
 	<!-- peering issues — fleet BGP/peering sessions not established -->
-	<div class="doc-peering" style="margin-top:1.75rem">
-		<div class="page-head" style="margin-bottom:1rem">
-			<div>
-				<div class="ph-title">
-					<Icon name="bird" size={20} />
-					<h2 style="margin:0; font-size:1.15rem">{t('dash.peering.title')}</h2>
-				</div>
-				<p class="ph-sub">{t('dash.peering.subtitle')}</p>
-			</div>
-			{#if peeringLoaded && peeringIssues.length > 0}
-				<span class="kpi"><strong class="bad-num">{peeringIssues.length}</strong> {t('dash.peering.count', peeringIssues.length)}</span>
-			{/if}
-		</div>
-		<div class="card">
+	<div class="sect">
+		<Widget title={t('dash.peering.title')} sub={t('dash.peering.subtitle')}>
+			{#snippet controls()}
+				{#if peeringLoaded && peeringIssues.length > 0}
+					<span class="kpi"><strong class="bad-num">{peeringIssues.length}</strong> {t('dash.peering.count', peeringIssues.length)}</span>
+				{/if}
+			{/snippet}
 			{#if !peeringLoaded}
 				<div class="pi-rows">
 					{#each Array(3) as _, i (i)}<Skeleton h="1.9rem" />{/each}
@@ -216,60 +233,81 @@
 					{/each}
 				</div>
 			{/if}
-		</div>
+		</Widget>
 	</div>
 
-	<!-- routing — FleetRouting renders its own static header + shape-matched skeleton -->
-	<div class="doc-routing" style="margin-top:1.75rem">
-		<FleetRouting />
+	<!-- routing — FleetRouting renders its own Widget cards + shape-matched skeleton -->
+	<div class="sect">
+		<FleetRouting data={routing} asof={asofLabel} />
 	</div>
 
-	<!-- traffic — section header static; left = fleet rx/tx trend, right = per-node/per-peer ranking -->
-	<div class="doc-traffic" style="margin-top:1.75rem">
-		<div class="page-head trend-head" style="margin-bottom:1rem">
-			<div>
-				<div class="ph-title">
-					<Icon name="activity" size={20} />
-					<h2 style="margin:0; font-size:1.15rem">{t('dash.traffic')}</h2>
-				</div>
-				<p class="ph-sub">{t('dash.trafficSub')}</p>
-			</div>
-			{#if hasTraffic}
-				<div class="trend-now">
-					<span class="tn">
-						<span class="ld" style="background:{RX_COLOR}"></span>{t('traffic.rx')}
-						<b>{fmtRate(lastPt?.rx_bytes_per_sec ?? 0)}</b>
-						<small>{t('traffic.peak')} {fmtRate(peakRx)}</small>
-					</span>
-					<span class="tn">
-						<span class="ld" style="background:{TX_COLOR}"></span>{t('traffic.tx')}
-						<b>{fmtRate(lastPt?.tx_bytes_per_sec ?? 0)}</b>
-						<small>{t('traffic.peak')} {fmtRate(peakTx)}</small>
-					</span>
-				</div>
-			{/if}
-		</div>
-
+	<!-- traffic — Radar hero card: title/description live INSIDE the card, chart on
+	     the left, a border-divided rail with current rx/tx figures on the right
+	     (Radar's "流量趋势 | 协议" composition); ranking card beside. -->
+	<div class="sect">
 		<div class="traf-2col">
-			<div class="card traf-chart">
-				{#if hasTraffic}
-					<TrendChart series={trafficSeries} timestamps={trafficStamps} height={240} zeroBased format={fmtRate} />
-				{:else if !trafficLoaded}
-					<Skeleton h="240px" />
-				{:else}
-					<EmptyState icon="activity" title={t('dash.traffic.empty')} hint={t('dash.traffic.emptyHint')} />
-				{/if}
-			</div>
-
-			<div class="card traf-list">
-				<div class="traf-tabs">
-					<button class="traf-tab" class:active={trafTab === 'nodes'} onclick={() => (trafTab = 'nodes')}>
-						{t('traffic.byNode')}
-					</button>
-					<button class="traf-tab" class:active={trafTab === 'peers'} onclick={() => (trafTab = 'peers')}>
-						{t('traffic.byPeer')}
-					</button>
+			<Widget
+				title={t('dash.traffic')}
+				sub={t('dash.trafficSub')}
+				asof={asofLabel}
+				cls="traf-chart"
+			>
+				{#snippet controls()}
+					<div class="seg">
+						{#each TRAF_RANGES as r (r)}
+							<button class="segbtn" class:active={trafRange === r} onclick={() => (rangeParam.value = r)}>
+								{t(`range.${r}`)}
+							</button>
+						{/each}
+					</div>
+				{/snippet}
+				<div class="hero">
+					<div class="hero-main">
+						{#if hasTraffic}
+							<ChartLegend
+								items={[
+									{ label: t('traffic.rx'), color: RX_COLOR },
+									{ label: t('traffic.tx'), color: TX_COLOR },
+									...(hasPrev
+										? [{ label: t('chart.prevPeriod'), color: 'var(--text-faint)', dash: true }]
+										: [])
+								]}
+							/>
+							<TrendChart series={trafficSeries} timestamps={trafficStamps} height={220} zeroBased format={fmtRate} />
+						{:else if !trafficLoaded}
+							<Skeleton h="220px" />
+						{:else}
+							<EmptyState icon="activity" title={t('dash.traffic.empty')} hint={t('dash.traffic.emptyHint')} />
+						{/if}
+					</div>
+					{#if hasTraffic}
+						<div class="hero-rail">
+							<div class="rail-item">
+								<span class="rail-lbl"><i style="background:{RX_COLOR}"></i>{t('traffic.rx')}</span>
+								<span class="rail-val">{fmtRate(lastPt?.rx_bytes_per_sec ?? 0)}</span>
+								<span class="rail-sub">{t('traffic.peak')} {fmtRate(peakRx)}</span>
+							</div>
+							<div class="rail-item">
+								<span class="rail-lbl"><i style="background:{TX_COLOR}"></i>{t('traffic.tx')}</span>
+								<span class="rail-val">{fmtRate(lastPt?.tx_bytes_per_sec ?? 0)}</span>
+								<span class="rail-sub">{t('traffic.peak')} {fmtRate(peakTx)}</span>
+							</div>
+						</div>
+					{/if}
 				</div>
+			</Widget>
+
+			<Widget title={t('dash.traffic.ranking')} cls="traf-list">
+				{#snippet controls()}
+					<div class="seg">
+						<button class="segbtn" class:active={trafTab === 'nodes'} onclick={() => (trafTab = 'nodes')}>
+							{t('traffic.byNode')}
+						</button>
+						<button class="segbtn" class:active={trafTab === 'peers'} onclick={() => (trafTab = 'peers')}>
+							{t('traffic.byPeer')}
+						</button>
+					</div>
+				{/snippet}
 				{#if trafRows.length}
 					<div class="traf-rows">
 						{#each trafRows as r (r.key)}
@@ -292,7 +330,7 @@
 				{:else}
 					<div class="empty">{t('dash.traffic.empty')}</div>
 				{/if}
-			</div>
+			</Widget>
 		</div>
 	</div>
 {/if}
@@ -319,7 +357,7 @@
 		color: var(--text-dim);
 		padding: 0.1rem 0.55rem;
 		border: 1px solid var(--border);
-		border-radius: 999px;
+		border-radius: var(--radius-sm);
 	}
 	.ver-kpi:hover {
 		text-decoration: none;
@@ -399,23 +437,81 @@
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
 	}
-	.topo-head {
-		margin-bottom: 1rem;
-		align-items: flex-start;
+	/* dashboard sections stack with the Radar grid gap */
+	.sect {
+		margin-top: 1.5rem;
 	}
-	.trend-head {
-		align-items: flex-start;
+	/* Radar hero composition inside the traffic widget: chart column + rail */
+	.hero {
+		display: flex;
+		gap: 1.4rem;
+		flex: 1;
+		min-height: 0;
 	}
-	.trend-head .ph-sub {
-		margin: 0.15rem 0 0;
+	.hero-main {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.55rem;
 	}
-	/* traffic board: left rx/tx trend (60%) + right tabbed ranking (40%) */
+	.hero-rail {
+		flex: 0 0 168px;
+		border-left: 1px solid var(--border);
+		padding-left: 1.4rem;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		gap: 1.2rem;
+	}
+	.rail-item {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+	.rail-lbl {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-size: 0.76rem;
+		color: var(--text-dim);
+	}
+	.rail-lbl i {
+		width: 9px;
+		height: 9px;
+		border-radius: 2px;
+		flex: 0 0 auto;
+	}
+	.rail-val {
+		font-size: 1.3rem;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+		line-height: 1.15;
+	}
+	.rail-sub {
+		font-size: 0.72rem;
+		color: var(--text-faint);
+	}
+	@media (max-width: 720px) {
+		.hero {
+			flex-direction: column;
+		}
+		.hero-rail {
+			border-left: none;
+			border-top: 1px solid var(--border);
+			padding: 0.85rem 0 0;
+			flex-direction: row;
+			gap: 2rem;
+		}
+	}
+	/* traffic board: left rx/tx trend (60%) + right tabbed ranking (40%).
+	   The columns are Widget components, so their sizing classes need :global. */
 	.traf-2col {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: 1.5rem;
 	}
-	.traf-2col > .card + .card {
+	.traf-2col > :global(.card + .card) {
 		margin-top: 0; /* cancel global .card + .card stacking inside the flex row */
 	}
 	@media (min-width: 900px) {
@@ -424,42 +520,16 @@
 			align-items: stretch;
 			/* definite height so the (possibly long) ranking list scrolls internally
 			   instead of stretching both cards when switching to the peers tab */
-			height: 276px;
+			height: 404px;
 		}
-		.traf-chart {
+		.traf-2col > :global(.traf-chart) {
 			flex: 0 0 60%;
 			min-width: 0;
 		}
-		.traf-list {
-			flex: 0 0 calc(40% - 1rem);
-			display: flex;
-			flex-direction: column;
+		.traf-2col > :global(.traf-list) {
+			flex: 0 0 calc(40% - 1.5rem);
 			min-height: 0;
 		}
-	}
-	.traf-tabs {
-		display: flex;
-		gap: 0.25rem;
-		border-bottom: 1px solid var(--border);
-		margin-bottom: 0.5rem;
-	}
-	.traf-tab {
-		background: none;
-		border: none;
-		border-bottom: 2px solid transparent;
-		margin-bottom: -1px;
-		padding: 0.3rem 0.5rem;
-		font-size: 0.82rem;
-		font-weight: 600;
-		color: var(--text-faint);
-		cursor: pointer;
-	}
-	.traf-tab:hover {
-		color: var(--text-dim);
-	}
-	.traf-tab.active {
-		color: var(--accent);
-		border-bottom-color: var(--accent);
 	}
 	.traf-rows {
 		display: flex;
@@ -511,31 +581,6 @@
 		font-variant-numeric: tabular-nums;
 		text-align: right;
 		white-space: nowrap;
-	}
-	.trend-now {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 1.1rem;
-		font-size: 0.8rem;
-		color: var(--text-dim);
-	}
-	.tn {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.35rem;
-	}
-	.tn .ld {
-		width: 16px;
-		height: 3px;
-		border-radius: 2px;
-		display: inline-block;
-	}
-	.tn b {
-		color: var(--text);
-		font-variant-numeric: tabular-nums;
-	}
-	.tn small {
-		color: var(--text-faint);
 	}
 	.kpi strong {
 		font-variant-numeric: tabular-nums;

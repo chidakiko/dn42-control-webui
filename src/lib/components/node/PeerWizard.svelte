@@ -14,15 +14,14 @@
 	// key) rather than a `secret://` placeholder — the placeholder makes the agent
 	// mint a separate escrow key that diverges from the published node key.
 	//
-	// Submit strategy on the deployed backend: the provision endpoint creates
-	// peering + interface + the primary session in one transaction; any extra
-	// sessions are attached afterwards via createSession using the returned
-	// peering_id.
+	// Submit: one provision call with bgp_specs[] — peering + interface + every
+	// session are created in a single transaction on the server (no partial
+	// half-configured peers). Defaults (node key / house link-local) come from
+	// GET /ui/nodes/{id}/peer-defaults instead of client-side heuristics.
 	import { onMount } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
 	import { t } from '$lib/i18n.svelte';
-	import type { InterfaceOut } from '$lib/types';
 	import Modal from './../Modal.svelte';
 	import JsonView from './../JsonView.svelte';
 	import Select from './../Select.svelte';
@@ -89,43 +88,28 @@
 	let extras = $state<SessionForm[]>([]); // advanced: explicit additional sessions
 	let showAdvanced = $state(false);
 
+	// Dismissal guard: once the operator has typed anything (or advanced a
+	// step), ESC / backdrop must confirm before discarding the wizard.
+	let dirty = $derived(
+		step > 0 || basics.name.trim() !== '' || basics.remote_asn.trim() !== '' || iface.public_key.trim() !== ''
+	);
+
 	// The parent mounts this component only while open ({#if}), so every open is a
 	// fresh instance with default $state — no manual reset needed.
 	onMount(deriveDefaults);
 
 	async function deriveDefaults() {
-		let ifaces: InterfaceOut[] = [];
+		// Server-derived prefill: node WG key reuse + the link-local this node
+		// already uses on its external peers.
 		try {
-			ifaces = await api.listInterfaces(nodeId);
+			const d = await api.peerDefaults(nodeId);
+			nodeKey = d.wireguard.private_key_ref ?? '';
+			if (d.wireguard.link_local) {
+				nodeLL = d.wireguard.link_local;
+				iface.our_ll = d.wireguard.link_local;
+			}
 		} catch {
-			return; // no defaults — operator fills manually
-		}
-		const wg = ifaces.filter((i) => i.kind === 'wireguard');
-		// Node key: shared across all of this node's interfaces; take the first
-		// plaintext (non-placeholder) private_key_ref.
-		for (const i of wg) {
-			const k = String((i.spec as Record<string, unknown>).private_key_ref ?? '');
-			if (k && !k.startsWith('secret://')) {
-				nodeKey = k;
-				break;
-			}
-		}
-		// House link-local: the fe80:: this node uses on its EXTERNAL peers (names
-		// not matching the internal wg-<node>/dn42-* convention). Most common wins.
-		const counts = new Map<string, number>();
-		for (const i of wg) {
-			if (/^wg-/.test(i.name) || /^dn42-/.test(i.name)) continue; // internal links
-			const addrs = ((i.spec as Record<string, unknown>).addresses as string[]) ?? [];
-			for (const a of addrs) {
-				const bare = a.split('/')[0].trim();
-				if (bare.toLowerCase().startsWith('fe80:'))
-					counts.set(bare, (counts.get(bare) ?? 0) + 1);
-			}
-		}
-		const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-		if (best) {
-			nodeLL = best[0];
-			iface.our_ll = best[0];
+			/* no defaults — operator fills manually */
 		}
 	}
 
@@ -295,30 +279,23 @@
 
 	async function submit() {
 		if (!validStep()) return;
-		const primary = bgp.enabled_session ? buildPrimarySession() : null;
-		const extraSpecs = extras.map(buildExtra);
+		const specs = [
+			...(bgp.enabled_session ? [buildPrimarySession()] : []),
+			...extras.map(buildExtra)
+		];
 		const body: Record<string, unknown> = {
 			peering: buildPeering(),
 			interface_spec: buildIface(),
 			interface_enabled: true
 		};
-		if (primary) body.bgp_spec = primary;
-		else if (extraSpecs.length) body.bgp_spec = extraSpecs.shift();
+		// bgp_specs is XOR with the legacy bgp_spec; everything is created in one
+		// transaction server-side (any failure rolls the whole peer back).
+		if (specs.length) body.bgp_specs = specs;
 
 		submitting = true;
 		try {
-			const res = (await api.provisionPeering(nodeId, body)) as { peering: { id: number } };
-			const pid = res.peering.id;
-			const failed: string[] = [];
-			for (const spec of extraSpecs) {
-				try {
-					await api.createSession(nodeId, { spec, peering_id: pid });
-				} catch (e) {
-					failed.push(`${spec.name}: ${errorMessage(e)}`);
-				}
-			}
-			if (failed.length) toast.error(t('peer.wiz.partial', failed.join('; ')));
-			else toast.success(t('peer.wiz.done'));
+			await api.provisionPeering(nodeId, body);
+			toast.success(t('peer.wiz.done'));
 			oncreated?.();
 			open = false;
 		} catch (e) {
@@ -329,7 +306,7 @@
 	}
 </script>
 
-<Modal title={t('peer.prov.title')} bind:open>
+<Modal title={t('peer.prov.title')} bind:open dirty={dirty && !submitting}>
 	<ol class="steps">
 		{#each STEPS as s, i (s)}
 			<li class:active={i === step} class:done={i < step}>
@@ -596,7 +573,7 @@
 		font-size: 0.66rem;
 		padding: 0.05rem 0.35rem;
 		margin-left: 0.35rem;
-		border-radius: 999px;
+		border-radius: var(--radius-sm);
 		background: var(--accent-soft);
 		color: var(--accent);
 		vertical-align: middle;

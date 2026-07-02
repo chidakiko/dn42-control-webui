@@ -20,6 +20,9 @@
 	let running = $state(false);
 	let output = $state('');
 	let exitInfo = $state<{ code: number | null; error: string | null } | null>(null);
+	// stream closed without a `done` frame (server died mid-probe) — say so
+	// instead of the terminal just silently stopping.
+	let disconnected = $state(false);
 	let ctrl: AbortController | null = null;
 	let pre = $state<HTMLPreElement | undefined>(undefined);
 
@@ -37,6 +40,7 @@
 		}
 		output = '';
 		exitInfo = null;
+		disconnected = false;
 		running = true;
 		const controller = new AbortController();
 		ctrl = controller;
@@ -55,6 +59,7 @@
 				},
 				controller.signal
 			);
+			if (exitInfo === null && !controller.signal.aborted) disconnected = true;
 		} catch (err) {
 			// An abort (user pressed Stop / re-ran) is expected — don't surface it.
 			if (!(err instanceof DOMException && err.name === 'AbortError')) {
@@ -125,7 +130,9 @@
 
 <div class="term-wrap">
 	<pre bind:this={pre} class="term" class:empty={!output}>{output || (running ? t('probe.running') : t('probe.hint'))}</pre>
-	{#if exitInfo}
+	{#if disconnected}
+		<div class="term-foot bad"><Icon name="alert-triangle" size={13} />{t('probe.disconnected')}</div>
+	{:else if exitInfo}
 		{#if exitInfo.error}
 			<div class="term-foot bad"><Icon name="alert-triangle" size={13} />{exitInfo.error}</div>
 		{:else}

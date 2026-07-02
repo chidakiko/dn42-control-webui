@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	import { pollEffect } from '$lib/refresh.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
 	import { toast } from '$lib/toast.svelte';
-	import { fmtTime, relTime, agentLiveness } from '$lib/format';
+	import { fmtTime, relTime } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import InlineBanner from '$lib/components/InlineBanner.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import SkeletonTable from '$lib/components/SkeletonTable.svelte';
@@ -24,9 +25,13 @@
 	let uploading = $state(false);
 	let upVersion = $state('');
 	let upFiles = $state<FileList | null>(null);
+	const uploadGuard = dirtyGuard(
+		() => showUpload,
+		() => [upVersion, upFiles?.length ?? 0]
+	);
 
 	async function load() {
-		loading = true;
+		if (!data) loading = true;
 		error = '';
 		try {
 			data = await api.agentReleases();
@@ -38,10 +43,7 @@
 			loading = false;
 		}
 	}
-	$effect(() => {
-		autoRefresh.tick;
-		untrack(() => load());
-	});
+	pollEffect(() => load());
 
 	async function setTarget() {
 		if (!pickTarget) return;
@@ -94,9 +96,10 @@
 			cols={['7rem', '6rem', '5rem', '5rem', '5rem', '7rem']}
 		/>
 	</div>
-{:else if error}
+{:else if error && !data}
 	<div class="card"><p class="error-text">{error}</p></div>
 {:else if data}
+	{#if error}<InlineBanner detail={error} />{/if}
 	<!-- Global target version control -->
 	<div class="card target">
 		<div class="t-main">
@@ -142,7 +145,7 @@
 				</thead>
 				<tbody>
 					{#each data.nodes as n (n.node_id)}
-						{@const live = agentLiveness(n.last_seen)}
+						{@const live = n.liveness}
 						<tr>
 							<td><a class="mono" href="/nodes/{encodeURIComponent(n.node_id)}">{n.node_id}</a></td>
 							<td class="mono">{n.agent_version}</td>
@@ -167,7 +170,7 @@
 	</div>
 {/if}
 
-<Modal title={t('arel.uploadTitle')} bind:open={showUpload}>
+<Modal title={t('arel.uploadTitle')} bind:open={showUpload} dirty={uploadGuard.dirty && !uploading}>
 	<label class="field"><span>{t('arel.f.version')}</span><input class="mono" bind:value={upVersion} placeholder="1.0.42" /></label>
 	<label class="field">
 		<span>{t('arel.f.files')}</span>

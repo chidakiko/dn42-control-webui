@@ -2,10 +2,14 @@
 	import { onMount } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
+	import { confirmDialog } from '$lib/confirm.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
 	import type { PeeringIn, PeeringOut } from '$lib/types';
 	import { t } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Modal from './../Modal.svelte';
+	import InlineBanner from './../InlineBanner.svelte';
+	import RowMenu from './../RowMenu.svelte';
 	import SkeletonTable from './../SkeletonTable.svelte';
 
 	let { nodeId, onchange }: { nodeId: string; onchange?: () => void } = $props();
@@ -27,9 +31,13 @@
 		enabled: true,
 		notes: ''
 	});
+	const formGuard = dirtyGuard(
+		() => showForm,
+		() => f
+	);
 
 	async function refresh() {
-		loading = true;
+		if (items.length === 0) loading = true;
 		err = '';
 		try {
 			items = await api.listPeerings(nodeId);
@@ -89,7 +97,14 @@
 	}
 
 	async function del(p: PeeringOut) {
-		if (!confirm(t('peer.confirmDelete', p.name))) return;
+		if (
+			!(await confirmDialog({
+				message: t('peer.confirmDelete', p.name),
+				confirmLabel: t('common.delete'),
+				danger: true
+			}))
+		)
+			return;
 		try {
 			await api.deletePeering(p.id);
 			toast.success(t('peer.deleted'));
@@ -106,8 +121,9 @@
 		<button class="btn sm icon" onclick={refresh} disabled={loading} aria-label={t('common.refresh')}><Icon name="refresh" size={15} /></button>
 	</div>
 </div>
-<p class="faint" style="font-size:0.78rem; margin-top:-0.4rem">{t('peer.note')}</p>
+<p class="card-sub" style="margin-top:-0.4rem">{t('peer.note')}</p>
 
+{#if err && items.length > 0}<InlineBanner detail={err} />{/if}
 {#if loading && items.length === 0}
 	<SkeletonTable
 		headers={[
@@ -120,7 +136,7 @@
 		]}
 		cols={['7rem', '5rem', '5rem', '4rem', '3rem', '3rem']}
 	/>
-{:else if err}
+{:else if err && items.length === 0}
 	<p class="error-text">{err}</p>
 {:else if items.length === 0}
 	<div class="empty">{t('peer.empty')}</div>
@@ -144,8 +160,12 @@
 						>
 					</td>
 					<td class="actions">
-						<button class="btn ghost sm" onclick={() => openEdit(p)}>{t('common.edit')}</button>
-						<button class="btn ghost sm danger" onclick={() => del(p)}>{t('common.delete')}</button>
+						<RowMenu
+							actions={[
+								{ label: t('common.edit'), icon: 'edit', onselect: () => openEdit(p) },
+								{ label: t('common.delete'), icon: 'trash', danger: true, onselect: () => del(p) }
+							]}
+						/>
 					</td>
 				</tr>
 			{/each}
@@ -153,7 +173,7 @@
 	</table>
 {/if}
 
-<Modal title={editing ? t('peer.edit') : t('peer.add')} bind:open={showForm}>
+<Modal title={editing ? t('peer.edit') : t('peer.add')} bind:open={showForm} dirty={formGuard.dirty && !saving}>
 	<div class="row">
 		<label class="field"><span>{t('peer.f.name')} *</span><input bind:value={f.name} /></label>
 		<label class="field"><span>{t('peer.f.remoteAsn')} *</span><input bind:value={f.remote_asn} /></label>

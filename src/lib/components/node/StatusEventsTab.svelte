@@ -1,29 +1,39 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
+	import { toast } from '$lib/toast.svelte';
 	import { fmtTime } from '$lib/format';
 	import { t, locale } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/Icon.svelte';
-	import type { StatusEvent, DriftItem } from '$lib/types';
+	import type { StatusEventSummary, DriftItem } from '$lib/types';
 	import HealthBadge from './../HealthBadge.svelte';
 	import Modal from './../Modal.svelte';
 	import JsonView from './../JsonView.svelte';
 	import DriftCards from './../DriftCards.svelte';
 	import Select from './../Select.svelte';
 	import SkeletonTable from './../SkeletonTable.svelte';
+	import SkeletonText from './../SkeletonText.svelte';
+	import InlineBanner from './../InlineBanner.svelte';
 	import BarChart from './../charts/BarChart.svelte';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	import ChartLegend from './../charts/ChartLegend.svelte';
+	import { pollEffect } from '$lib/refresh.svelte';
 
 	let { nodeId }: { nodeId: string } = $props();
 
-	let items = $state<StatusEvent[]>([]);
+	// Slim rows (no payloads — report rows carry drift_count instead); the full
+	// payload is fetched on demand when a row is expanded. Newest-first, paged
+	// backwards via the before_id cursor.
+	const PAGE = 100;
+	let items = $state<StatusEventSummary[]>([]);
 	let loading = $state(true);
+	let loadingMore = $state(false);
+	let hasMore = $state(false);
 	let err = $state('');
 	let kind = $state('');
 	let range = $state<'24h' | '7d' | '30d' | 'all'>('24h');
 
 	let showPayload = $state(false);
 	let payload = $state<unknown>(null);
+	let payloadLoading = $state(false);
 
 	const RANGES = ['24h', '7d', '30d', 'all'] as const;
 	const WINDOW: Record<string, number> = {
@@ -33,23 +43,58 @@
 		all: Infinity
 	};
 
-	async function refresh() {
+	async function refresh(reset = false) {
+		if (reset) {
+			items = [];
+			hasMore = false;
+		}
 		if (items.length === 0) loading = true;
 		err = '';
 		try {
-			const r = await api.statusEvents(nodeId, kind || undefined, 300);
-			items = r.events;
+			const r = await api.uiStatusEvents(nodeId, { kind: kind || undefined, limit: PAGE });
+			if (items.length > PAGE) {
+				// The operator has paged into history — prepend only what's new so a
+				// background tick doesn't yank the older pages out from under them.
+				const headId = items[0]?.id ?? -Infinity;
+				const fresh = r.events.filter((e) => e.id > headId);
+				if (fresh.length) items = [...fresh, ...items];
+			} else {
+				items = r.events;
+				hasMore = r.events.length === PAGE;
+			}
 		} catch (e) {
 			err = errorMessage(e);
 		} finally {
 			loading = false;
 		}
 	}
-	$effect(() => {
-		autoRefresh.tick;
-		nodeId; // reload when the node changes
-		untrack(() => refresh());
-	});
+	async function loadMore() {
+		const last = items[items.length - 1];
+		if (!last || loadingMore) return;
+		loadingMore = true;
+		try {
+			const r = await api.uiStatusEvents(nodeId, {
+				kind: kind || undefined,
+				limit: PAGE,
+				beforeId: last.id
+			});
+			items = [...items, ...r.events];
+			hasMore = r.events.length === PAGE;
+		} catch (e) {
+			toast.error(errorMessage(e));
+		} finally {
+			loadingMore = false;
+		}
+	}
+	let lastNode = '';
+	pollEffect(
+		() => {
+			const nodeChanged = lastNode !== nodeId;
+			lastNode = nodeId;
+			return refresh(nodeChanged);
+		},
+		() => nodeId
+	);
 
 	function toMs(s: string | null): number {
 		if (!s) return NaN;
@@ -113,9 +158,19 @@
 
 	let hasChart = $derived(buckets.some((g) => g.parts.some((p) => p.value > 0)));
 
-	function view(ev: StatusEvent) {
-		payload = ev.payload;
+	// Fetch the full event (payload included) only when the operator expands it.
+	async function view(ev: StatusEventSummary) {
 		showPayload = true;
+		payloadLoading = true;
+		payload = null;
+		try {
+			payload = (await api.statusEventDetail(ev.id)).payload;
+		} catch (e) {
+			toast.error(errorMessage(e));
+			showPayload = false;
+		} finally {
+			payloadLoading = false;
+		}
 	}
 
 	// A report payload carries payload.drift[]; surface it as cards, JSON as fallback.
@@ -146,10 +201,10 @@
 			]}
 			onChange={(v) => {
 				kind = v;
-				refresh();
+				refresh(true);
 			}}
 		/>
-		<button class="btn sm icon" onclick={refresh} disabled={loading} aria-label={t('common.refresh')}><Icon name="refresh" size={15} /></button>
+		<button class="btn sm icon" onclick={() => refresh(true)} disabled={loading} aria-label={t('common.refresh')}><Icon name="refresh" size={15} /></button>
 	</div>
 </div>
 
@@ -158,19 +213,22 @@
 		headers={[t('status.col.kind'), t('status.col.gen'), t('status.col.status'), t('status.col.when'), '']}
 		cols={['5rem', '3rem', '4rem', '7rem', '2rem']}
 	/>
-{:else if err}
+{:else if err && items.length === 0}
 	<p class="error-text">{err}</p>
 {:else if items.length === 0}
 	<div class="empty">{t('status.empty')}</div>
 {:else}
+	{#if err}<InlineBanner detail={err} />{/if}
 	{#if hasChart}
 		<div class="timeline">
 			<div class="tl-head">
 				<span class="faint">{t('status.timeline')}</span>
-				<div class="key">
-					<span><span class="kd" style="background:var(--c-ok)"></span>{t('st.succeeded')}</span>
-					<span><span class="kd" style="background:var(--c-bad)"></span>{t('st.failed')}</span>
-				</div>
+				<ChartLegend
+					items={[
+						{ label: t('st.succeeded'), color: 'var(--c-ok)' },
+						{ label: t('st.failed'), color: 'var(--c-bad)' }
+					]}
+				/>
 			</div>
 			<BarChart groups={buckets} height={110} />
 		</div>
@@ -185,7 +243,10 @@
 				<tr>
 					<td><span class="tag">{ev.kind}</span></td>
 					<td class="mono">{ev.generation ?? '—'}</td>
-					<td><HealthBadge value={ev.status} /></td>
+					<td>
+						<HealthBadge value={ev.status} />
+						{#if ev.drift_count}<span class="drift-n">{t('status.driftN', ev.drift_count)}</span>{/if}
+					</td>
 					<td class="faint">{fmtTime(ev.created_at)}</td>
 					<td class="actions">
 						<button class="btn ghost sm" onclick={() => view(ev)}>{t('status.payload')}</button>
@@ -194,10 +255,19 @@
 			{/each}
 		</tbody>
 	</table>
+	{#if hasMore}
+		<div class="more">
+			<button class="btn sm" onclick={loadMore} disabled={loadingMore}>
+				{loadingMore ? t('common.loading') : t('status.loadMore')}
+			</button>
+		</div>
+	{/if}
 {/if}
 
 <Modal title={t('status.payloadTitle')} bind:open={showPayload}>
-	{#if driftItems.length}
+	{#if payloadLoading}
+		<SkeletonText lines={8} />
+	{:else if driftItems.length}
 		<DriftCards items={driftItems} />
 		<details class="rawjson">
 			<summary>{t('drift.rawJson')}</summary>
@@ -209,29 +279,22 @@
 </Modal>
 
 <style>
-	.seg {
-		display: inline-flex;
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-sm);
-		overflow: hidden;
+	.drift-n {
+		margin-left: 0.4rem;
+		font-size: 0.66rem;
+		font-weight: 700;
+		color: var(--c-bad);
+		background: color-mix(in srgb, var(--c-bad) 14%, transparent);
+		border-radius: 4px;
+		padding: 0.05rem 0.32rem;
+		font-variant-numeric: tabular-nums;
 	}
-	.segbtn {
-		background: var(--bg-elev);
-		border: none;
-		border-right: 1px solid var(--border);
-		color: var(--text-dim);
-		padding: 0.25rem 0.55rem;
-		font: inherit;
-		font-size: 0.78rem;
-		cursor: pointer;
+	.more {
+		display: flex;
+		justify-content: center;
+		padding: 0.6rem 0 0.2rem;
 	}
-	.segbtn:last-child {
-		border-right: none;
-	}
-	.segbtn.active {
-		background: var(--accent);
-		color: #fff;
-	}
+	/* .seg / .segbtn segmented control moved to app.css (shared) */
 	.timeline {
 		padding: 0.5rem 0.25rem 0.75rem;
 		margin-bottom: 0.5rem;
@@ -242,22 +305,6 @@
 		justify-content: space-between;
 		margin-bottom: 0.5rem;
 		font-size: 0.75rem;
-	}
-	.key {
-		display: flex;
-		gap: 0.85rem;
-		color: var(--text-dim);
-	}
-	.key span {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.3rem;
-	}
-	.kd {
-		width: 9px;
-		height: 9px;
-		border-radius: 2px;
-		display: inline-block;
 	}
 	.rawjson {
 		margin-top: 0.75rem;

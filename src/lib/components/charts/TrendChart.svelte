@@ -12,11 +12,14 @@
 	interface Series {
 		label: string;
 		color: string;
-		values: number[];
+		/** null = empty bucket in range-grid mode → rendered as a gap */
+		values: (number | null)[];
 		/** draw a gradient area under the line (primary series) */
 		fill?: boolean;
 		/** render as a dashed comparison line (e.g. previous period) */
 		dash?: boolean;
+		/** step line — semantically correct for count series (routes, peers) */
+		step?: boolean;
 	}
 
 	let {
@@ -25,6 +28,7 @@
 		height = 200,
 		zeroBased = false,
 		format = (v: number) => v.toLocaleString(),
+		tickFormat,
 		leftAxisWidth
 	}: {
 		series: Series[];
@@ -32,6 +36,8 @@
 		height?: number;
 		zeroBased?: boolean;
 		format?: (v: number) => string;
+		/** y-axis tick formatter (e.g. compact "1302万"); tooltip keeps `format` */
+		tickFormat?: (v: number) => string;
 		/** force a fixed left-axis width (px) so this chart's plot area aligns with another stacked below it */
 		leftAxisWidth?: number;
 	} = $props();
@@ -69,21 +75,40 @@
 		ensureChart();
 		const th = chartTheme();
 		chart?.destroy();
+		// Radar draws a thin solid frame around the whole plot area (its
+		// chart-outer-line token); Chart.js has no built-in for this, so draw it
+		// after every render.
+		const plotFrame = {
+			id: 'plotFrame',
+			afterDraw(c: ChartType) {
+				const a = c.chartArea;
+				if (!a) return;
+				c.ctx.save();
+				c.ctx.strokeStyle = th.axisLine;
+				c.ctx.lineWidth = 1;
+				c.ctx.strokeRect(a.left + 0.5, a.top + 0.5, a.width - 1, a.height - 1);
+				c.ctx.restore();
+			}
+		};
 		chart = new Chart(canvas, {
 			type: 'line',
+			plugins: [plotFrame],
 			data: {
 				labels: timestamps.map((_, i) => i),
-				datasets: series.map((s) => ({
+				datasets: series.map((s, i) => ({
 					label: s.label,
 					data: s.values,
 					borderColor: resolveColor(s.color),
-					borderWidth: s.dash ? 1.5 : 2,
-					borderDash: s.dash ? [5, 4] : undefined,
+					// Radar line hierarchy: primary series heaviest, secondaries lighter,
+					// dashed comparison thinnest (same hue as its solid counterpart).
+					borderWidth: s.dash ? 1.5 : i === 0 ? 2.5 : 2,
+					borderDash: s.dash ? [4, 4] : undefined,
 					pointRadius: 0,
 					pointHoverRadius: 3.5,
 					pointHoverBorderColor: resolveColor(s.color),
 					pointHoverBackgroundColor: resolveColor('var(--bg-elev)'),
-					tension: 0.4,
+					stepped: s.step ?? false,
+					tension: s.step ? 0 : 0.4,
 					fill: s.fill ? 'origin' : false,
 					backgroundColor: s.fill
 						? (ctx: { chart: ChartType }) => {
@@ -118,8 +143,11 @@
 					}
 				},
 				scales: {
+					// Radar grid: vertical dashed time-boundary lines only; no horizontal
+					// grid — values are read from the tooltip, the y-axis just anchors scale.
 					x: {
-						grid: { color: th.grid },
+						grid: { color: th.gridDash },
+						border: { dash: [4, 4], color: th.axisLine },
 						ticks: {
 							color: th.tick,
 							maxRotation: 0,
@@ -131,8 +159,13 @@
 					y: {
 						beginAtZero: zeroBased,
 						afterFit: leftAxisWidth ? (s) => void (s.width = leftAxisWidth) : undefined,
-						grid: { color: th.grid },
-						ticks: { color: th.tick, maxTicksLimit: 3, callback: (v) => format(Number(v)) }
+						grid: { display: false },
+						border: { display: false },
+						ticks: {
+							color: th.tick,
+							maxTicksLimit: 3,
+							callback: (v) => (tickFormat ?? format)(Number(v))
+						}
 					}
 				}
 			}

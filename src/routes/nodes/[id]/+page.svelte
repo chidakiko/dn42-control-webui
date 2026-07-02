@@ -1,14 +1,24 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
+	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api, ApiError, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
-	import { fmtTime, relTime, agentLiveness } from '$lib/format';
-	import { resolveGeo } from '$lib/geo';
+	import { confirmDialog } from '$lib/confirm.svelte';
+	import { fmtTime, relTime } from '$lib/format';
+	import { geoLabel } from '$lib/geo';
 	import { t } from '$lib/i18n.svelte';
-	import { autoRefresh } from '$lib/refresh.svelte';
-	import type { NodeOut, PeeringOut, NodeHealthValue, NodeOverview, BgpSessionStatus } from '$lib/types';
+	import { pollEffect } from '$lib/refresh.svelte';
+	import { urlParam } from '$lib/urlstate.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
+	import type {
+		NodeOut,
+		PeeringOut,
+		NodeHealthValue,
+		NodeOverview,
+		NodeTrendsOut,
+		BgpSessionStatus
+	} from '$lib/types';
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Modal from '$lib/components/Modal.svelte';
@@ -42,25 +52,20 @@
 	let error = $state('');
 	let peerings = $state<PeeringOut[]>([]);
 	let overview = $state<NodeOverview | null>(null);
+	let trends = $state<NodeTrendsOut | null>(null);
 	let health = $derived<NodeHealthValue | null>(overview?.health ?? null);
 	let showWizard = $state(false);
 
-	// Human-readable location for the header: resolve the cryptic `site` code into a
-	// city name (falling back to the country/area, then DN42 region, then raw code).
-	let locationName = $derived.by(() => {
-		if (!node?.site) return node?.site ?? '—';
-		const g = resolveGeo(node.site);
-		return g.cityName ?? g.countryName ?? g.regionName ?? node.site;
-	});
+	// Human-readable location for the header, from the server-resolved geo
+	// (city → country → region → raw site code).
+	let locationName = $derived(geoLabel(overview?.geo, node?.site));
 
 	// "Disconnected" = the control center hasn't heard from the node recently.
-	// Heartbeat is the primary signal (the agent beats every ~30s over WS); we fall
-	// back to report-derived health only when the node has never sent a heartbeat
+	// Liveness is graded server-side from the WS heartbeat; we fall back to
+	// report-derived health only when the node has never sent a heartbeat
 	// (old agent / pre-heartbeat). stale = warning, down = error; real-time push is
 	// unavailable in both.
-	let liveness = $derived(
-		overview?.last_heartbeat_at ? agentLiveness(overview.last_heartbeat_at) : null
-	);
+	let liveness = $derived(overview?.last_heartbeat_at ? overview.liveness : null);
 	let disconnected = $derived(
 		liveness ? liveness !== 'online' : health === 'stale' || health === 'down'
 	);
@@ -133,10 +138,11 @@
 	const groupOf = (tabId: string): Group =>
 		GROUPS.find((g) => g.id === tabId || g.tabs.some((s) => s.id === tabId)) ?? GROUPS[0];
 
-	// Deep-link support: honour ?tab=<id> on first load (e.g. from the dashboard
-	// routing card), falling back to overview for unknown values.
-	const initialTab = page.url.searchParams.get('tab');
-	let tab = $state(initialTab && ALL_TAB_IDS.includes(initialTab) ? initialTab : 'overview');
+	// Tab state lives in ?tab= (two-way): deep links work AND every switch is
+	// written back, so tabs are shareable, refresh-safe and back-button
+	// navigable. Unknown values fall back to overview.
+	const tabParam = urlParam('tab', 'overview', { push: true });
+	let tab = $derived(ALL_TAB_IDS.includes(tabParam.value) ? tabParam.value : 'overview');
 	let activeGroup = $derived(groupOf(tab));
 
 	let desired = $state<unknown>(null);
@@ -150,20 +156,10 @@
 	let labelsText = $state('{}');
 	let baseEditor: JsonEditor;
 	let labelsEditor: JsonEditor;
-
-	async function loadNode() {
-		// Spinner only on the first load; background polls update silently so they
-		// never unmount the active tab / open form.
-		if (!node) loading = true;
-		error = '';
-		try {
-			node = await api.getNode(nodeId);
-		} catch (err) {
-			error = errorMessage(err);
-		} finally {
-			loading = false;
-		}
-	}
+	const editGuard = dirtyGuard(
+		() => showEdit,
+		() => [e, baseText, labelsText]
+	);
 
 	async function loadPeerings() {
 		try {
@@ -173,14 +169,33 @@
 		}
 	}
 
-	// One fetch for the whole node page: health + capabilities + self_metrics + drift
-	// + typed link/BGP status. Replaces the old 4× nodeHealth + last_snapshot parsing.
+	// ONE fetch for the whole node page: the full node record now rides inside
+	// /overview alongside health + capabilities + self_metrics + drift + typed
+	// link/BGP status. 404 = node doesn't exist; a never-reported node still
+	// returns 200 (health "unknown" + full node), so new nodes render fine.
 	async function loadOverview() {
+		// Spinner only on the first load; background polls update silently so they
+		// never unmount the active tab / open form.
+		if (!node) loading = true;
+		error = '';
 		try {
 			overview = await api.nodeOverview(nodeId);
+			node = overview.node;
+		} catch (err) {
+			// keep the last good data on background-poll hiccups; only surface
+			// errors when we have nothing to show (first load / 404).
+			if (!node) error = errorMessage(err);
+		} finally {
+			loading = false;
+		}
+	}
+
+	// Sparkline series for the overview tab (shared by NodeTrends + NodeSelfMetrics).
+	async function loadTrends() {
+		try {
+			trends = await api.nodeTrends(nodeId);
 		} catch {
-			// 404 = never reported → leave as unknown (not "disconnected")
-			overview = null;
+			/* trend cards are best-effort */
 		}
 	}
 
@@ -237,15 +252,9 @@
 	onMount(loadPeerings);
 
 	// Initial load + keep node/health fresh on each auto-refresh tick so the
-	// disconnection banner appears/clears live.
-	$effect(() => {
-		autoRefresh.tick;
-		nodeId; // reload when navigating to a different node
-		untrack(() => {
-			loadNode();
-			loadOverview();
-		});
-	});
+	// disconnection banner appears/clears live. pollEffect skips overlapping
+	// ticks; a nodeId change always reloads.
+	pollEffect(() => Promise.all([loadOverview(), loadTrends()]), () => nodeId);
 
 	async function loadDesired() {
 		desired = null;
@@ -295,7 +304,7 @@
 			});
 			toast.success(t('node.updated'));
 			showEdit = false;
-			await loadNode();
+			await loadOverview();
 		} catch (err) {
 			toast.error(errorMessage(err));
 		} finally {
@@ -305,7 +314,14 @@
 
 	async function lifecycle(action: 'decommission' | 'recommission') {
 		const label = action === 'decommission' ? t('node.decommission') : t('node.recommission');
-		if (!confirm(t('node.confirmLifecycle', label, nodeId))) return;
+		if (
+			!(await confirmDialog({
+				message: t('node.confirmLifecycle', label, nodeId),
+				confirmLabel: label,
+				danger: true
+			}))
+		)
+			return;
 		try {
 			node =
 				action === 'decommission'
@@ -333,7 +349,16 @@
 	}
 
 	async function del() {
-		if (!confirm(t('node.confirmDelete', nodeId))) return;
+		if (
+			!(await confirmDialog({
+				message: t('node.confirmDelete', nodeId),
+				confirmLabel: t('common.delete'),
+				danger: true,
+				// irreversible: GitHub-style type-the-name guard
+				typeToConfirm: nodeId
+			}))
+		)
+			return;
 		try {
 			await api.deleteNode(nodeId);
 			toast.success(t('node.deleted'));
@@ -480,7 +505,7 @@
 			<button
 				class="tab"
 				class:active={activeGroup.id === g.id}
-				onclick={() => (tab = groupContentId(g))}
+				onclick={() => (tabParam.value = groupContentId(g))}
 			>
 				{t(g.key)}
 			</button>
@@ -491,7 +516,7 @@
 		{#if activeGroup.tabs.length > 1}
 			<nav class="subnav">
 				{#each activeGroup.tabs as s (s.id)}
-					<button class="subnav-item" class:active={tab === s.id} onclick={() => (tab = s.id)}>
+					<button class="subnav-item" class:active={tab === s.id} onclick={() => (tabParam.value = s.id)}>
 						{t(s.key)}
 					</button>
 				{/each}
@@ -503,9 +528,9 @@
 			<div class="card-head">
 				<h3>{t('node.tab.overview')}</h3>
 			</div>
-			<NodeTrends {nodeId} />
-			<NodeIssues {nodeId} drift={overview?.drift} asOf={overview?.last_report_at} />
-			<NodeSelfMetrics {nodeId} current={overview?.self_metrics ?? null} />
+			<NodeTrends {trends} />
+			<NodeIssues drift={overview?.drift} asOf={overview?.last_report_at} />
+			<NodeSelfMetrics {trends} current={overview?.self_metrics ?? null} />
 			<div class="grid">
 				<div><span class="k">{t('node.f.asn')}</span><span class="mono">{node.asn}</span></div>
 				<div><span class="k">{t('node.f.routerId')}</span><span class="mono">{node.router_id}</span></div>
@@ -578,7 +603,12 @@
 				remove={(id) => api.deleteSession(id)}
 			/>
 		{:else if tab === 'dns'}
-			<NodeDnsTab {nodeId} currentGroupId={node?.dns_group_id ?? null} onchange={loadNode} />
+			<NodeDnsTab
+				{nodeId}
+				currentGroupId={node?.dns_group_id ?? null}
+				currentName={overview?.dns_group?.name ?? null}
+				onchange={loadOverview}
+			/>
 		{:else if tab === 'internal'}
 			<InternalTopologyTab {nodeId} />
 			{:else if tab === 'probe'}
@@ -588,7 +618,7 @@
 		{:else if tab === 'tuning'}
 			<RouteTuningTab {nodeId} />
 		{:else if tab === 'generations'}
-			<GenerationsTab {nodeId} onchange={loadNode} />
+			<GenerationsTab {nodeId} onchange={loadOverview} />
 		{:else if tab === 'status'}
 			<StatusEventsTab {nodeId} />
 		{:else if tab === 'desired'}
@@ -613,7 +643,7 @@
 {/if}
 </div>
 
-<Modal title={t('node.edit')} bind:open={showEdit}>
+<Modal title={t('node.edit')} bind:open={showEdit} dirty={editGuard.dirty && !saving}>
 	<div class="row">
 		<label class="field"><span>{t('node.f.asn')}</span><input bind:value={e.asn} /></label>
 		<label class="field"><span>{t('node.f.routerId')}</span><input bind:value={e.router_id} /></label>
@@ -640,7 +670,7 @@
 		bind:open={showWizard}
 		oncreated={() => {
 			loadPeerings();
-			loadNode();
+			loadOverview();
 		}}
 	/>
 {/if}
@@ -652,7 +682,7 @@
 		gap: 0.3rem;
 		padding: 0.12rem 0.5rem;
 		border: 1px solid var(--border);
-		border-radius: 999px;
+		border-radius: var(--radius-sm);
 		font-size: 0.78rem;
 		font-family: var(--font-mono, monospace);
 		color: var(--text-dim);

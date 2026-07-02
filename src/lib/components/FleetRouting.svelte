@@ -6,44 +6,39 @@
 	//   right — a node list surfacing what actually differs per node: convergence status
 	//           (does its count match the fleet? a lagging node = iBGP/convergence issue)
 	//           and RPKI-invalid counts (differ by each node's external peers).
-	import { untrack } from 'svelte';
-	import { api, errorMessage } from '$lib/api';
+	// Purely presentational: the routing block rides in the parent's /ui/dashboard
+	// fetch and is piped in via the `data` prop (null until the first load).
 	import type { FleetRoutingOverview } from '$lib/types';
+	import { fmtTime } from '$lib/format';
 	import TrendChart from '$lib/components/charts/TrendChart.svelte';
-	import BarChart from '$lib/components/charts/BarChart.svelte';
 	import Donut from '$lib/components/charts/Donut.svelte';
+	import ChartLegend from '$lib/components/charts/ChartLegend.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import Widget from '$lib/components/Widget.svelte';
+	import Toggle from '$lib/components/Toggle.svelte';
 	import Skeleton from '$lib/components/Skeleton.svelte';
-	import { autoRefresh } from '$lib/refresh.svelte';
 	import { t, locale } from '$lib/i18n.svelte';
 
-	let data = $state<FleetRoutingOverview | null>(null);
-	let loading = $state(true);
-	let error = $state('');
+	let { data = null, asof = '' }: { data?: FleetRoutingOverview | null; asof?: string } = $props();
+	let loading = $derived(data === null);
 
-	const V4_COLOR = 'var(--c-accent)';
-	const V6_COLOR = 'var(--c-ok)';
+	// Routing cards stamp the newest ROUTING SNAPSHOT time (collection lags by
+	// minutes), not the dashboard aggregation time — fall back to the parent's
+	// generated_at label when no node has reported yet.
+	let routingAsof = $derived(
+		data?.captured_at ? `${t('common.updatedAt')} ${fmtTime(data.captured_at)}` : asof
+	);
 
-	async function load() {
-		if (!data) loading = true;
-		error = '';
-		try {
-			// One BFF call: summary + per-node + server-aggregated size/churn trend.
-			data = await api.routingFleetOverview();
-		} catch (err) {
-			error = errorMessage(err);
-		} finally {
-			loading = false;
-		}
-	}
-
-	$effect(() => {
-		autoRefresh.tick;
-		untrack(() => load());
-	});
+	// address-family split is quantity data, not status → data palette
+	const V4_COLOR = 'var(--c-data-1)';
+	const V6_COLOR = 'var(--c-data-2)';
 
 	const pct = (v: number, tot: number) => (tot > 0 ? Math.round((v / tot) * 100) : 0);
 	const fmt = (n: number) => n.toLocaleString();
+	// Radar stat cells show a compact primary ("12万"/"120K", locale-aware) with
+	// full per-family numbers in the small rows beneath.
+	const compact = (n: number) =>
+		new Intl.NumberFormat(locale.tag, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 	function median(a: number[]): number {
 		if (!a.length) return 0;
 		const s = [...a].sort((x, y) => x - y);
@@ -59,9 +54,8 @@
 	let invalidRoutes = $derived(data?.invalid_routes ?? []);
 	let showInvalid = $state(false);
 
-	// fleet address-family split donut (IPv4 / IPv6)
+	// fleet address-family split (IPv4 / IPv6 share bar)
 	let famTotal = $derived(data ? data.summary.route_count_v4 + data.summary.route_count_v6 : 0);
-	let v4pct = $derived(data ? pct(data.summary.route_count_v4, famTotal) : 0);
 	let familySegments = $derived(
 		data
 			? [
@@ -71,13 +65,15 @@
 			: []
 	);
 
-	// fleet RPKI distribution donut (valid / not-found / invalid)
+	// fleet RPKI distribution gauge — Radar colours this with the categorical
+	// palette (blue/cyan/orange), treating it as data; alert semantics (red)
+	// stay on the invalid-routes banner below.
 	let rpkiSegments = $derived(
 		data
 			? [
-					{ label: t('routing.rpki.valid'), value: data.summary.rpki.valid, color: 'var(--c-ok)' },
-					{ label: t('routing.rpki.not_found'), value: data.summary.rpki.not_found, color: 'var(--c-warn)' },
-					{ label: t('routing.rpki.invalid'), value: data.summary.rpki.invalid, color: 'var(--c-bad)' }
+					{ label: t('routing.rpki.valid'), value: data.summary.rpki.valid, color: 'var(--c-data-1)' },
+					{ label: t('routing.rpki.not_found'), value: data.summary.rpki.not_found, color: 'var(--c-data-2)' },
+					{ label: t('routing.rpki.invalid'), value: data.summary.rpki.invalid, color: 'var(--c-data-3)' }
 				]
 			: []
 	);
@@ -100,31 +96,20 @@
 		const tr = data?.trend ?? [];
 		return {
 			stamps: tr.map((p) => p.captured_at ?? ''),
-			size: tr.map((p) => p.size),
-			ann: tr.map((p) => p.announced),
-			wd: tr.map((p) => p.withdrawn)
+			size: tr.map((p) => p.size)
 		};
 	});
 	let hasTrend = $derived(fleetTrend.size.length > 1);
-	let totalChurn = $derived(
-		fleetTrend.ann.reduce((s, v) => s + v, 0) + fleetTrend.wd.reduce((s, v) => s + v, 0)
-	);
 
-	let sizeSeries = $derived([
-		{ label: t('routing.sizeTrend'), color: V4_COLOR, values: fleetTrend.size, fill: true }
-	]);
-	function hhmm(iso: string): string {
-		return new Date(iso).toLocaleTimeString(locale.tag, { hour: '2-digit', minute: '2-digit' });
-	}
-	let churnGroups = $derived(
-		fleetTrend.stamps.map((s, i) => ({
-			label: hhmm(s),
-			parts: [
-				{ key: 'announced', value: fleetTrend.ann[i], color: 'var(--c-ok)' },
-				{ key: 'withdrawn', value: fleetTrend.wd[i], color: 'var(--c-bad)' }
-			]
-		}))
-	);
+	// Radar "announced IP address space" composition: per-family step charts with
+	// a 两者/IPv4/IPv6 segmented switch and a min-max y-scale toggle. The trend
+	// carries real per-family sizes (size_v4/size_v6; `size` stays = total).
+	let sizeV4 = $derived((data?.trend ?? []).map((p) => p.size_v4));
+	let sizeV6 = $derived((data?.trend ?? []).map((p) => p.size_v6));
+	let famView = $state<'both' | '4' | '6'>('both');
+	// Radar defaults the min/max toggle ON: y-axis hugs the data range so small
+	// route-count movements stay visible; off = zero-based.
+	let minMax = $state(true);
 
 	// --- per-node convergence: a node whose count lags the fleet median = problem ---
 	let fleetMedian = $derived(data ? median(data.nodes.map((n) => n.route_count)) : 0);
@@ -139,118 +124,148 @@
 	// --- fleet RIB top origin-AS table (the dimension that actually varies row-to-row;
 	// per-node route counts are identical once iBGP converges) ---
 	let origins = $derived(data?.origins ?? []);
-	let maxOrigin = $derived(origins.length ? origins[0].count : 0);
+
+	// Radar Top-N table: client-side ASN search + sort-metric seg + pagination.
+	// The sort reorders the fetched top-100 window (server-sorted by total count)
+	// — exact enough at DN42 scale without refetching the whole dashboard.
+	const ORIGINS_PAGE = 20;
+	let orgQuery = $state('');
+	let orgPage = $state(0);
+	let orgSort = $state<'count' | 'v4' | 'v6'>('count');
+	const orgMetric = (o: { count: number; count_v4: number; count_v6: number }) =>
+		orgSort === 'v4' ? o.count_v4 : orgSort === 'v6' ? o.count_v6 : o.count;
+	let orgQ = $derived(orgQuery.trim().toLowerCase().replace(/^as/, ''));
+	let orgFiltered = $derived.by(() => {
+		const rows = orgQ ? origins.filter((o) => String(o.asn).includes(orgQ)) : origins;
+		return orgSort === 'count' ? rows : [...rows].sort((a, b) => orgMetric(b) - orgMetric(a));
+	});
+	let maxOrigin = $derived(orgFiltered.length ? orgMetric(orgFiltered[0]) : 0);
+	let orgPages = $derived(Math.max(1, Math.ceil(orgFiltered.length / ORIGINS_PAGE)));
+	let orgSafePage = $derived(Math.min(orgPage, orgPages - 1));
+	let orgRows = $derived(
+		orgFiltered.slice(orgSafePage * ORIGINS_PAGE, orgSafePage * ORIGINS_PAGE + ORIGINS_PAGE)
+	);
+	$effect(() => {
+		orgQuery; // typing a new search / changing the metric resets to page 1
+		orgSort;
+		orgPage = 0;
+	});
 </script>
 
-<div class="page-head" style="margin-bottom:1rem">
-	<div>
-		<div class="ph-title">
-			<Icon name="route" size={20} />
-			<h2 style="margin:0; font-size:1.15rem">{t('dash.routing.title')}</h2>
-		</div>
-		<p class="ph-sub">{t('dash.routing.subtitle')}</p>
-	</div>
-	{#if data}<span class="faint">{t('dash.routing.reporting', data.summary.nodes_reporting)}</span>
-	{:else if loading}<Skeleton w="84px" h="0.9rem" />{/if}
-</div>
-
-{#if loading && !data}
-	<!-- shape-matched skeleton: same cards + static headers as loaded, only data slots
-	     are skeletonized so the section frame doesn't shift on load. -->
-	<div class="card head-card">
-		<div class="strip">
-			{#each Array(6) as _, i (i)}
-				<div class="stat">
-					<Skeleton w="44px" h="0.7rem" />
-					<Skeleton w="58px" h="1.4rem" />
-				</div>
-			{/each}
-		</div>
-		<div class="donuts">
-			<div class="donut-block"><Skeleton circle h="108px" /></div>
-			<div class="donut-block"><Skeleton circle h="108px" /></div>
-		</div>
-	</div>
-	<div class="rt-2col">
-		<div class="card rt-chart">
-			<div class="card-head"><h3>{t('routing.sizeTrend')}</h3></div>
-			<Skeleton h="170px" />
-			<div class="card-head" style="margin-top:0.6rem"><h3 class="muted">{t('routing.churn')}</h3></div>
-			<Skeleton h="90px" />
-		</div>
-		<div class="card rt-list">
-			<div class="card-head">
-				<h3>{t('routing.topOrigins')}</h3>
-				<span class="faint" style="font-size:0.78rem">{t('routing.topOriginsSub')}</span>
-			</div>
-			<div class="org-list">
-				{#each Array(10) as _, i (i)}<Skeleton h="1.4rem" />{/each}
-			</div>
-		</div>
-	</div>
-{:else if error}
-	<div class="card"><p class="error-text">{error}</p></div>
-{:else if data && data.summary.nodes_reporting === 0}
-	<div class="card"><div class="empty">{t('dash.routing.empty')}</div></div>
-{:else if data}
-	<!-- headline numbers + fleet RPKI donut -->
-	<div class="card head-card">
-		<div class="strip">
-			<div class="stat">
-				<span class="lbl">{t('routing.total')}</span><span class="num">{fmt(data.summary.route_count)}</span>
-			</div>
-			<div class="stat">
-				<span class="lbl">{t('routing.v4')}</span><span class="num" style="color:var(--c-accent)">{fmt(data.summary.route_count_v4)}</span>
-			</div>
-			<div class="stat">
-				<span class="lbl">{t('routing.v6')}</span><span class="num" style="color:var(--c-ok)">{fmt(data.summary.route_count_v6)}</span>
-			</div>
-			<div class="stat">
-				<span class="lbl">{t('routing.rpki.valid')}</span><span class="num">{pct(data.summary.rpki.valid, rpkiTotal)}<small>%</small></span>
-			</div>
-			<div class="stat">
-				<span class="lbl">{t('routing.rpki.invalid')}</span>
-				<span class="num" class:bad-num={invalidTotal > 0}>{fmt(data.summary.rpki.invalid)}</span>
-			</div>
-			<div class="stat">
-				<span class="lbl">{t('routing.rpki.not_found')}</span><span class="num">{fmt(data.summary.rpki.not_found)}</span>
-			</div>
-		</div>
-		<div class="donuts">
-			{#if famTotal > 0}
-				<div class="donut-block">
-					<Donut
-						segments={familySegments}
-						size={108}
-						thickness={14}
-						centerValue="{v4pct}%"
-						centerLabel={t('routing.v4')}
-					/>
-					<div class="legend">
-						<span><i style="background:{V4_COLOR}"></i>{t('routing.v4')} {fmt(data.summary.route_count_v4)}</span>
-						<span><i style="background:{V6_COLOR}"></i>{t('routing.v6')} {fmt(data.summary.route_count_v6)}</span>
+<!-- Widget header is static and always rendered; only data slots skeletonize so
+     the section frame never shifts on load. -->
+<Widget title={t('dash.routing.title')} sub={t('dash.routing.subtitle')} asof={routingAsof}>
+	{#snippet controls()}
+		{#if data}<span class="card-sub">{t('dash.routing.reporting', data.summary.nodes_reporting)}</span>
+		{:else if loading}<Skeleton w="84px" h="0.9rem" />{/if}
+	{/snippet}
+	{#if loading && !data}
+		<div class="head-flex">
+			<ul class="stat-cells">
+				{#each Array(5) as _, i (i)}
+					<li>
+						<Skeleton w="44px" h="0.7rem" />
+						<Skeleton w="58px" h="1.3rem" />
+						<Skeleton w="70px" h="0.7rem" />
+					</li>
+				{/each}
+			</ul>
+			<div class="gauges">
+				{#each Array(2) as _, i (i)}
+					<div class="gauge">
+						<Skeleton w="72px" h="1.9rem" />
+						<Skeleton w="190px" h="98px" />
+						<Skeleton w="72px" h="1.9rem" />
 					</div>
-				</div>
-			{/if}
+				{/each}
+			</div>
+		</div>
+	{:else if data && data.summary.nodes_reporting === 0}
+		<div class="empty">{t('dash.routing.empty')}</div>
+	{:else if data}
+		<div class="head-flex">
+			<!-- Radar routing-stats cells: bordered grid, centered content — small
+			     label / compact primary / (share%) / per-family breakdown rows -->
+			<ul class="stat-cells">
+				<li>
+					<span class="sc-lbl">AS</span>
+					<span class="sc-val">{compact(data.summary.as_count)}</span>
+					<dl class="sc-other">
+						<div class="g"><dt>IPv4:</dt><dd>{fmt(data.summary.as_count_v4)}</dd></div>
+						<div class="g"><dt>IPv6:</dt><dd>{fmt(data.summary.as_count_v6)}</dd></div>
+					</dl>
+				</li>
+				<li>
+					<span class="sc-lbl">{t('routing.total')}</span>
+					<span class="sc-val">{compact(data.summary.route_count)}</span>
+					<dl class="sc-other">
+						<div class="g"><dt>IPv4:</dt><dd>{fmt(data.summary.route_count_v4)}</dd></div>
+						<div class="g"><dt>IPv6:</dt><dd>{fmt(data.summary.route_count_v6)}</dd></div>
+					</dl>
+				</li>
+				<li>
+					<span class="sc-lbl">{t('routing.rpki.valid')}</span>
+					<span class="sc-val">{compact(data.summary.rpki.valid)}</span>
+					<span class="sc-pct">({pct(data.summary.rpki.valid, rpkiTotal)}%)</span>
+					<dl class="sc-other">
+						<div class="g"><dt>IPv4:</dt><dd>{fmt(data.summary.rpki_v4.valid)}</dd></div>
+						<div class="g"><dt>IPv6:</dt><dd>{fmt(data.summary.rpki_v6.valid)}</dd></div>
+					</dl>
+				</li>
+				<li>
+					<span class="sc-lbl">{t('routing.rpki.invalid')}</span>
+					<span class="sc-val">{compact(data.summary.rpki.invalid)}</span>
+					<span class="sc-pct">({rpkiTotal ? +((data.summary.rpki.invalid / rpkiTotal) * 100).toFixed(2) : 0}%)</span>
+					<dl class="sc-other">
+						<div class="g"><dt>IPv4:</dt><dd>{fmt(data.summary.rpki_v4.invalid)}</dd></div>
+						<div class="g"><dt>IPv6:</dt><dd>{fmt(data.summary.rpki_v6.invalid)}</dd></div>
+					</dl>
+				</li>
+				<li>
+					<span class="sc-lbl">{t('routing.rpki.not_found')}</span>
+					<span class="sc-val">{compact(data.summary.rpki.not_found)}</span>
+					<span class="sc-pct">({pct(data.summary.rpki.not_found, rpkiTotal)}%)</span>
+					<dl class="sc-other">
+						<div class="g"><dt>IPv4:</dt><dd>{fmt(data.summary.rpki_v4.not_found)}</dd></div>
+						<div class="g"><dt>IPv6:</dt><dd>{fmt(data.summary.rpki_v6.not_found)}</dd></div>
+					</dl>
+				</li>
+			</ul>
+		<!-- Radar routing-stats gauges: half-donut with the dominant share labelled
+		     above and its counterpart below (RPKI valid/unknown · IPv4/IPv6) -->
+		<div class="gauges">
 			{#if rpkiTotal > 0}
-				<div class="donut-block">
-					<Donut
-						segments={rpkiSegments}
-						size={108}
-						thickness={14}
-						centerValue="{pct(data.summary.rpki.valid, rpkiTotal)}%"
-						centerLabel={t('routing.rpki.center')}
-					/>
-					<div class="legend">
-						<span><i style="background:var(--c-ok)"></i>{t('routing.rpki.valid')}</span>
-						<span><i style="background:var(--c-warn)"></i>{t('routing.rpki.not_found')}</span>
-						<span><i style="background:var(--c-bad)"></i>{t('routing.rpki.invalid')}</span>
+				<div class="gauge">
+					<div class="g-pair">
+						<span class="g-lbl"><i style="background:var(--c-data-1)"></i>{t('routing.rpki.valid')}</span>
+						<b class="g-val">{pct(data.summary.rpki.valid, rpkiTotal)}%</b>
+					</div>
+					<Donut half segments={rpkiSegments} size={190} thickness={28} />
+					<div class="g-pair">
+						<span class="g-lbl"><i style="background:var(--c-data-2)"></i>{t('routing.rpki.not_found')}</span>
+						<b class="g-val">{pct(data.summary.rpki.not_found, rpkiTotal)}%</b>
 					</div>
 				</div>
 			{/if}
+			{#if famTotal > 0}
+				<div class="gauge">
+					<div class="g-pair">
+						<span class="g-lbl"><i style="background:{V4_COLOR}"></i>{t('routing.v4')}</span>
+						<b class="g-val">{pct(data.summary.route_count_v4, famTotal)}%</b>
+					</div>
+					<Donut half segments={familySegments} size={190} thickness={28} />
+					<div class="g-pair">
+						<span class="g-lbl"><i style="background:{V6_COLOR}"></i>{t('routing.v6')}</span>
+						<b class="g-val">{pct(data.summary.route_count_v6, famTotal)}%</b>
+					</div>
+				</div>
+			{/if}
+			</div>
 		</div>
-	</div>
+	{/if}
+</Widget>
 
+{#if !(data && data.summary.nodes_reporting === 0)}
 	{#if divergedNodes.length > 0}
 		<div class="rt-alert">
 			<Icon name="alert-triangle" size={15} />
@@ -287,129 +302,243 @@
 		{/if}
 	{/if}
 
-	<div class="rt-2col">
-		<!-- left: fleet route-table size trend + churn -->
-		<div class="card rt-chart">
-			<div class="card-head"><h3>{t('routing.sizeTrend')}</h3></div>
-			{#if hasTrend}
-				<TrendChart
-					series={sizeSeries}
-					timestamps={fleetTrend.stamps}
-					height={170}
-					format={fmt}
-					leftAxisWidth={48}
-				/>
-				<div class="card-head" style="margin-top:0.6rem">
-					<h3 class="muted">{t('routing.churn')}</h3>
-					<span class="faint" style="font-size:0.78rem">Σ {fmt(totalChurn)}</span>
+	<!-- fleet route-table size — Radar "announced IP address space" module:
+	     stacked per-family step charts, 两者/IPv4/IPv6 seg, min-max scale toggle -->
+	<Widget title={t('routing.sizeTrend')}>
+			{#snippet controls()}
+				<div class="seg">
+					<button class="segbtn" class:active={famView === 'both'} onclick={() => (famView = 'both')}>{t('common.both')}</button>
+					<button class="segbtn" class:active={famView === '4'} onclick={() => (famView = '4')}>{t('routing.v4')}</button>
+					<button class="segbtn" class:active={famView === '6'} onclick={() => (famView = '6')}>{t('routing.v6')}</button>
 				</div>
-				<BarChart groups={churnGroups} height={90} leftAxisWidth={48} />
+				<Toggle label={t('routing.minMaxScale')} bind:checked={minMax} />
+			{/snippet}
+			{#if loading && !data}
+				<Skeleton h="200px" />
+				<div style="margin-top:1.5rem"><Skeleton h="200px" /></div>
+			{:else if hasTrend}
+				{#if famView !== '6'}
+					<div class="fam-chart">
+						<ChartLegend items={[{ label: t('routing.v4'), color: V4_COLOR, line: true }]} />
+						<TrendChart
+							series={[{ label: t('routing.v4'), color: V4_COLOR, values: sizeV4, step: true }]}
+							timestamps={fleetTrend.stamps}
+							height={famView === 'both' ? 200 : 250}
+							zeroBased={!minMax}
+							format={fmt}
+							tickFormat={compact}
+							leftAxisWidth={48}
+						/>
+					</div>
+				{/if}
+				{#if famView !== '4'}
+					<div class="fam-chart">
+						<ChartLegend items={[{ label: t('routing.v6'), color: V4_COLOR, line: true }]} />
+						<TrendChart
+							series={[{ label: t('routing.v6'), color: V4_COLOR, values: sizeV6, step: true }]}
+							timestamps={fleetTrend.stamps}
+							height={famView === 'both' ? 200 : 250}
+							zeroBased={!minMax}
+							format={fmt}
+							tickFormat={compact}
+							leftAxisWidth={48}
+						/>
+					</div>
+				{/if}
 			{:else}
 				<div class="empty">{t('common.loading')}</div>
 			{/if}
-		</div>
+		</Widget>
 
-		<!-- right: fleet RIB top origin-AS table (per-node counts converge — origins are the
-		     dimension that actually varies; counts aggregated fleet-wide, per-ASN max) -->
-		<div class="card rt-list">
-			<div class="card-head">
-				<h3>{t('routing.topOrigins')}</h3>
-				<span class="faint" style="font-size:0.78rem">{t('routing.topOriginsSub')}</span>
+	<!-- fleet RIB top origin-AS table (per-node counts converge — origins are the
+	     dimension that actually varies; counts aggregated fleet-wide, per-ASN max) -->
+	<Widget title={t('routing.topOrigins')} sub={t('routing.topOriginsSub')}>
+		{#snippet controls()}
+			<div class="seg">
+				<button class="segbtn" class:active={orgSort === 'count'} onclick={() => (orgSort = 'count')}>{t('routing.routes')}</button>
+				<button class="segbtn" class:active={orgSort === 'v4'} onclick={() => (orgSort = 'v4')}>{t('routing.v4')}</button>
+				<button class="segbtn" class:active={orgSort === 'v6'} onclick={() => (orgSort = 'v6')}>{t('routing.v6')}</button>
 			</div>
-			{#if origins.length}
-				<div class="org-list">
-					{#each origins as o, i (o.asn)}
-						<div class="org-row">
-							<span class="org-rank">{i + 1}</span>
-							<span class="org-asn mono">AS{o.asn}</span>
-							<span class="org-bar"><i style="width:{maxOrigin ? (o.count / maxOrigin) * 100 : 0}%"></i></span>
-							<span class="org-count mono">{fmt(o.count)}</span>
-						</div>
+			<input class="search org-search" placeholder={t('common.search')} bind:value={orgQuery} />
+		{/snippet}
+		{#if origins.length}
+			<table class="org-table">
+				<thead>
+					<tr>
+						<th class="c-rank">#</th>
+						<th>ASN</th>
+						<th></th>
+						<th class="c-num">{t('routing.routes')}</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each orgRows as o, i (o.asn)}
+						<tr>
+							<td class="c-rank">{orgSafePage * ORIGINS_PAGE + i + 1}</td>
+							<td class="c-asn">
+								<a class="mono" href="https://explorer.burble.com/#/AS{o.asn}" target="_blank" rel="noreferrer">AS{o.asn}</a>
+							</td>
+							<td class="c-bar">
+								<span class="org-bar"><i style="width:{maxOrigin ? (orgMetric(o) / maxOrigin) * 100 : 0}%"></i></span>
+							</td>
+							<td class="c-num mono">{fmt(orgMetric(o))}</td>
+						</tr>
+					{:else}
+						<tr><td colspan="4"><div class="empty">—</div></td></tr>
 					{/each}
+				</tbody>
+			</table>
+			{#if orgPages > 1}
+				<div class="org-foot">
+					<button
+						class="btn sm icon pg-prev"
+						disabled={orgSafePage === 0}
+						onclick={() => (orgPage = orgSafePage - 1)}
+						aria-label="previous page"><Icon name="chevron-down" size={14} /></button>
+					<span class="pg mono">{orgSafePage + 1} / {orgPages}</span>
+					<button
+						class="btn sm icon pg-next"
+						disabled={orgSafePage >= orgPages - 1}
+						onclick={() => (orgPage = orgSafePage + 1)}
+						aria-label="next page"><Icon name="chevron-down" size={14} /></button>
 				</div>
-			{:else}
-				<div class="empty">{t('common.loading')}</div>
 			{/if}
-		</div>
-	</div>
+		{:else if loading && !data}
+			<div class="org-sk">
+				{#each Array(10) as _, i (i)}<Skeleton h="1.6rem" />{/each}
+			</div>
+		{:else}
+			<div class="empty">{t('common.loading')}</div>
+		{/if}
+	</Widget>
 {/if}
 
 <style>
-	.head-card {
+	.head-flex {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 1.5rem;
 		flex-wrap: wrap;
 	}
-	.strip {
-		display: flex;
-		flex-wrap: wrap;
+	/* Radar routing-stats cells: bordered grid with 1px dividers (gap trick),
+	   centered content per cell */
+	.stat-cells {
+		list-style: none;
+		margin: 0;
+		padding: 0;
 		flex: 1;
 		min-width: 0;
+		/* cap cell width so the cells don't over-stretch, but generously enough
+		   that the box reaches toward the gauges on wide screens */
+		max-width: 78rem;
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+		gap: 1px;
+		background: var(--border);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		overflow: hidden;
 	}
-	.donuts {
-		display: flex;
-		align-items: center;
-		gap: 1.6rem;
-		flex-wrap: wrap;
-	}
-	.donut-block {
-		display: flex;
-		align-items: center;
-		gap: 0.85rem;
-	}
-	.donut-block .legend {
+	.stat-cells li {
+		background: var(--bg-elev);
+		padding: 1.15rem 1rem 1rem;
 		display: flex;
 		flex-direction: column;
-		gap: 0.3rem;
-		font-size: 0.74rem;
-		color: var(--text-dim);
-	}
-	.donut-block .legend span {
-		display: flex;
 		align-items: center;
-		gap: 0.35rem;
+		text-align: center;
+		gap: 0.45rem;
+		min-width: 0;
+	}
+	.sc-lbl {
+		font-size: 0.8rem;
+		color: var(--text-dim);
 		white-space: nowrap;
 	}
-	.donut-block .legend i {
+	.sc-val {
+		font-size: 1.5rem;
+		font-weight: 700;
+		font-variant-numeric: tabular-nums;
+		line-height: 1.05;
+	}
+	/* share% hugs the primary number — near-white and semi-bold like Radar's "(70%)" */
+	.sc-pct {
+		font-size: 0.82rem;
+		font-weight: 650;
+		color: var(--text);
+		font-variant-numeric: tabular-nums;
+		margin-top: -0.25rem;
+	}
+	.sc-other {
+		margin: 0.5rem 0 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		font-size: 0.78rem;
+		color: var(--text-dim);
+	}
+	.sc-other .g {
+		display: flex;
+		justify-content: center;
+		gap: 0.35rem;
+	}
+	.sc-other dt {
+		color: var(--text-faint);
+	}
+	.sc-other dd {
+		margin: 0;
+		font-variant-numeric: tabular-nums;
+	}
+	.fam-chart {
+		margin-bottom: 1.5rem;
+	}
+	/* legend starts where the plot area starts (indent = leftAxisWidth) */
+	.fam-chart > :global(.chart-legend) {
+		margin: 0 0 0.5rem 48px;
+	}
+	/* Radar half-donut blocks: label+value pairs LEFT-aligned above/below the
+	   arc, 1.25rem bold values, wide spacing between the two gauges */
+	.gauges {
+		display: flex;
+		align-items: center;
+		gap: 3.5rem;
+		flex-wrap: wrap;
+		padding-right: 0.5rem;
+	}
+	.gauge {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.55rem;
+		width: 190px;
+	}
+	.g-pair {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.15rem;
+	}
+	.g-lbl {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.8rem;
+		color: var(--text);
+		white-space: nowrap;
+	}
+	.g-lbl i {
 		width: 9px;
 		height: 9px;
 		border-radius: 2px;
 		flex: 0 0 auto;
 	}
-	.stat {
-		display: flex;
-		flex-direction: column;
-		gap: 0.25rem;
-		padding: 0.1rem 1.1rem;
-		border-left: 1px solid var(--border);
-	}
-	.stat:first-child {
-		border-left: none;
-		padding-left: 0;
-	}
-	.stat .lbl {
-		font-size: 0.72rem;
-		color: var(--text-faint);
-		text-transform: uppercase;
-		letter-spacing: 0.03em;
-		white-space: nowrap;
-	}
-	.stat .num {
-		font-size: 1.45rem;
+	.g-val {
+		font-size: 1.25rem;
 		font-weight: 700;
 		font-variant-numeric: tabular-nums;
 		line-height: 1.1;
 	}
-	.stat .num small {
-		font-size: 0.8rem;
-		font-weight: 600;
-		color: var(--text-dim);
-	}
-	.stat .num.bad-num {
-		color: var(--c-bad);
-	}
+	/* stat/legend layout comes from the global .stat-strip + shared ChartLegend */
 
 	.rt-alert {
 		display: flex;
@@ -473,73 +602,43 @@
 		color: var(--text);
 		font-weight: 600;
 	}
-
-	.rt-2col {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-		margin-top: 1rem;
-	}
-	/* the two side-by-side cards are adjacent .card siblings, so the global
-	   `.card + .card { margin-top }` rule pushes the right one down — cancel it
-	   so both card headers sit on the same row. */
-	.rt-2col > .card + .card {
-		margin-top: 0;
-	}
-	@media (min-width: 900px) {
-		.rt-2col {
-			flex-direction: row;
-			align-items: stretch;
-		}
-		.rt-chart {
-			flex: 0 0 60%;
-			min-width: 0;
-		}
-		.rt-list {
-			flex: 0 0 calc(40% - 1rem);
-			display: flex;
-			flex-direction: column;
-			min-height: 0;
-		}
+	/* a widget following an alert row needs the grid gap the global
+	   .card + .card rule can't provide (the alert isn't a card) */
+	.rt-alert + :global(.card),
+	.rt-invalid + :global(.card) {
+		margin-top: 1.5rem;
 	}
 
-	/* fleet RIB top origin-AS list (horizontal bars). Only this list scrolls — the
-	   card header (Top origin AS · subtitle) stays fixed above it. */
-	.org-list {
-		display: flex;
-		flex-direction: column;
-		gap: 0.1rem;
-		margin-top: 0.4rem;
-		flex: 1;
-		min-height: 0;
-		overflow-y: auto;
+	/* fleet RIB top origin-AS table (Radar Top-N table) */
+	.org-search {
+		width: 190px;
+		font-size: 0.8rem;
+		padding: 0.3rem 0.6rem;
 	}
-	.org-row {
-		display: grid;
-		grid-template-columns: 16px 96px 1fr 48px;
-		align-items: center;
-		column-gap: 0.55rem;
-		padding: 0.32rem 0.4rem;
-		border-radius: var(--radius-sm);
-	}
-	.org-row:hover {
-		background: var(--bg-elev-2);
-	}
-	.org-rank {
-		font-size: 0.7rem;
-		color: var(--text-faint);
+	.org-table .c-rank {
+		width: 2.2rem;
 		text-align: right;
+		color: var(--text-faint);
 		font-variant-numeric: tabular-nums;
 	}
-	.org-asn {
-		font-size: 0.8rem;
+	.org-table .c-asn a {
 		font-weight: 600;
-		color: var(--text);
+		font-size: 0.82rem;
+	}
+	.org-table .c-bar {
+		width: 42%;
+	}
+	.org-table .c-num {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+	}
+	/* Radar zebra rows; hover tint comes from the global table styles */
+	.org-table tbody tr:nth-child(even) {
+		background: color-mix(in srgb, var(--text) 3%, transparent);
 	}
 	.org-bar {
+		display: block;
 		height: 7px;
 		border-radius: 4px;
 		background: var(--bg-elev-2);
@@ -550,12 +649,30 @@
 		height: 100%;
 		min-width: 2px;
 		border-radius: 4px;
-		background: var(--c-accent);
+		background: var(--c-data-1);
 	}
-	.org-count {
+	/* pager footer: ◀ 1 / 5 ▶ */
+	.org-foot {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-top: 0.6rem;
+	}
+	.org-foot .pg {
 		font-size: 0.78rem;
 		color: var(--text-dim);
-		text-align: right;
-		font-variant-numeric: tabular-nums;
+		min-width: 3.2rem;
+		text-align: center;
+	}
+	.pg-prev :global(svg) {
+		transform: rotate(90deg);
+	}
+	.pg-next :global(svg) {
+		transform: rotate(-90deg);
+	}
+	.org-sk {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
 	}
 </style>

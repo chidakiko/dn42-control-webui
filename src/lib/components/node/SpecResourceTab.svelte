@@ -40,8 +40,12 @@
 	import { onMount } from 'svelte';
 	import { errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
+	import { confirmDialog } from '$lib/confirm.svelte';
+	import { dirtyGuard } from '$lib/dirty.svelte';
 	import { t } from '$lib/i18n.svelte';
 	import Modal from './../Modal.svelte';
+	import InlineBanner from './../InlineBanner.svelte';
+	import RowMenu from './../RowMenu.svelte';
 	import JsonEditor from './../JsonEditor.svelte';
 	import Icon from './../Icon.svelte';
 	import Select from './../Select.svelte';
@@ -108,6 +112,10 @@
 	// structured-form state: `form` is keyed by field key; advanced toggle drops to JSON.
 	let form = $state<Record<string, any>>({});
 	let jsonMode = $state(false);
+	const formGuard = dirtyGuard(
+		() => showForm,
+		() => [form, specText, enabled, sortOrder, peeringId]
+	);
 
 	// --- spec <-> form conversion ---
 	function specToForm(spec: Record<string, unknown>, defs: SpecField[]): Record<string, any> {
@@ -157,7 +165,7 @@
 	}
 
 	async function refresh() {
-		loading = true;
+		if (items.length === 0) loading = true;
 		err = '';
 		try {
 			items = await load();
@@ -225,10 +233,35 @@
 		return body;
 	}
 
+	// Enforce `required` before submit — the * marker alone was cosmetic: empty
+	// required fields were silently dropped by formToSpec and only bounced
+	// server-side as an opaque 4xx.
+	function missingRequired(fm: Record<string, any>, defs: SpecField[]): string[] {
+		const missing: string[] = [];
+		for (const f of defs) {
+			if (f.showWhen && fm[f.showWhen.key] !== f.showWhen.equals) continue;
+			if (f.type === 'group') {
+				missing.push(...missingRequired(fm[f.key] ?? {}, f.fields ?? []));
+				continue;
+			}
+			if (!f.required || f.type === 'bool') continue;
+			const v = fm[f.key];
+			if (v == null || String(v).trim() === '') missing.push(f.label);
+		}
+		return missing;
+	}
+
 	async function save() {
 		if ((jsonMode || !formFields) && !editor?.valid()) {
 			toast.error(t('spec.badSpec'));
 			return;
+		}
+		if (!jsonMode && formFields) {
+			const missing = missingRequired(form, formFields);
+			if (missing.length) {
+				toast.error(t('spec.requiredMissing', missing.join(', ')));
+				return;
+			}
 		}
 		saving = true;
 		try {
@@ -249,7 +282,14 @@
 	}
 
 	async function del(it: SpecItem) {
-		if (!confirm(t('spec.confirmDelete', singular, it.name))) return;
+		if (
+			!(await confirmDialog({
+				message: t('spec.confirmDelete', singular, it.name),
+				confirmLabel: t('common.delete'),
+				danger: true
+			}))
+		)
+			return;
 		try {
 			await remove(it.id);
 			toast.success(t('spec.deletedOf', singular));
@@ -270,9 +310,10 @@
 	</div>
 </div>
 
+{#if err && items.length > 0}<InlineBanner detail={err} />{/if}
 {#if loading && items.length === 0}
 	<SkeletonTable cols={['5rem', '7rem', '4rem', '10rem', '3rem']} />
-{:else if err}
+{:else if err && items.length === 0}
 	<p class="error-text">{err}</p>
 {:else if items.length === 0 && extraRows.length === 0}
 	<div class="empty">{t('spec.emptyOf', title)}</div>
@@ -320,7 +361,12 @@
 					</td>
 					{#if fields.sortOrder}<td class="mono">{it.sort_order ?? 0}</td>{/if}
 					<td class="actions">
-						<button class="btn ghost sm danger" onclick={() => del(it)}>{t('common.delete')}</button>
+						<RowMenu
+							actions={[
+								{ label: t('common.edit'), icon: 'edit', onselect: () => openEdit(it) },
+								{ label: t('common.delete'), icon: 'trash', danger: true, onselect: () => del(it) }
+							]}
+						/>
 					</td>
 				</tr>
 			{/each}
@@ -342,7 +388,11 @@
 	</table>
 {/if}
 
-<Modal title={editing ? t('spec.editOf', singular) : t('spec.addOf', singular)} bind:open={showForm}>
+<Modal
+	title={editing ? t('spec.editOf', singular) : t('spec.addOf', singular)}
+	bind:open={showForm}
+	dirty={formGuard.dirty && !saving}
+>
 	{#if fields.enabled || fields.sortOrder || fields.peering}
 		<div class="row">
 			{#if fields.enabled}
@@ -486,7 +536,7 @@
 		border: none;
 		padding: 0;
 		font: inherit;
-		color: var(--accent);
+		color: var(--link);
 		cursor: pointer;
 		text-align: left;
 		width: auto;

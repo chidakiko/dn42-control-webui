@@ -1,51 +1,17 @@
 <script lang="ts">
-	// Resident "current issues" panel. Prefers drift piped from the parent's
-	// /overview fetch (one request for the whole page); falls back to self-fetching
-	// the latest report event when used standalone (drift prop omitted).
-	import { untrack } from 'svelte';
-	import { api } from '$lib/api';
-	import { autoRefresh } from '$lib/refresh.svelte';
+	// Resident "current issues" panel, fed entirely from the parent's /overview
+	// fetch (drift items + last-report timestamp) — no fetching of its own.
 	import { t } from '$lib/i18n.svelte';
 	import { fmtTime } from '$lib/format';
-	import type { StatusEvent, DriftItem } from '$lib/types';
+	import type { DriftItem } from '$lib/types';
 	import DriftCards from '../DriftCards.svelte';
 
-	let {
-		nodeId,
-		drift,
-		asOf
-	}: { nodeId: string; drift?: DriftItem[]; asOf?: string | null } = $props();
+	let { drift, asOf }: { drift?: DriftItem[]; asOf?: string | null } = $props();
 
-	let usePiped = $derived(drift !== undefined);
-
-	// self-fetch fallback (standalone use)
-	let selfLatest = $state<StatusEvent | null>(null);
-	let selfLoaded = $state(false);
-
-	async function load() {
-		try {
-			const r = await api.statusEvents(nodeId, 'report', 1);
-			selfLatest = r.events[0] ?? null;
-		} catch {
-			/* best-effort */
-		} finally {
-			selfLoaded = true;
-		}
-	}
-	$effect(() => {
-		autoRefresh.tick;
-		nodeId; // reload when the node changes
-		if (!usePiped) untrack(() => load());
-	});
-
-	let items = $derived.by((): DriftItem[] => {
-		if (usePiped) return drift ?? [];
-		const d = (selfLatest?.payload as { drift?: unknown })?.drift;
-		return Array.isArray(d) ? (d as DriftItem[]) : [];
-	});
-	let reportedAt = $derived(usePiped ? (asOf ?? null) : (selfLatest?.created_at ?? null));
-	let ready = $derived(usePiped || selfLoaded);
-	let everReported = $derived(usePiped ? asOf != null : selfLatest !== null);
+	let items = $derived(drift ?? []);
+	let reportedAt = $derived(asOf ?? null);
+	let ready = $derived(drift !== undefined);
+	let everReported = $derived(asOf != null);
 </script>
 
 {#if ready}
@@ -90,7 +56,7 @@
 		font-weight: 700;
 		color: var(--bad);
 		background: color-mix(in srgb, var(--bad) 14%, transparent);
-		border-radius: 999px;
+		border-radius: var(--radius-sm);
 		padding: 0.05rem 0.45rem;
 	}
 	.when {
