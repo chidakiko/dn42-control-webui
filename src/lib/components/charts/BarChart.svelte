@@ -2,7 +2,7 @@
 	// Stacked vertical bar chart over time buckets, backed by Chart.js. Same API as
 	// before: each group is a bar made of stacked parts (keyed; colour per key).
 	import ChartCanvas from './ChartCanvas.svelte';
-	import { chartTheme, resolveColor } from './chartjs';
+	import { chartTheme, resolveColor, tooltipStyle } from './chartjs';
 	import type { ChartConfiguration } from 'chart.js';
 
 	interface Part {
@@ -56,14 +56,7 @@
 				animation: false,
 				plugins: {
 					legend: { display: false },
-					tooltip: {
-						backgroundColor: th.tooltipBg,
-						titleColor: th.tooltipText,
-						bodyColor: th.tooltipText,
-						borderColor: th.tooltipBorder,
-						borderWidth: 1,
-						padding: 8
-					}
+					tooltip: tooltipStyle(th, 8)
 				},
 				scales: {
 					x: {

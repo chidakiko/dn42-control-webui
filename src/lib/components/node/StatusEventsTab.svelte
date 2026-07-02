@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
-	import { fmtTime } from '$lib/format';
+	import { fmtTime, parseTs } from '$lib/format';
 	import { t, locale } from '$lib/i18n.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import type { StatusEventSummary, DriftItem } from '$lib/types';
@@ -97,9 +97,7 @@
 	);
 
 	function toMs(s: string | null): number {
-		if (!s) return NaN;
-		const hasZone = /[zZ]$/.test(s) || /[+-]\d\d:?\d\d$/.test(s);
-		return new Date(hasZone ? s : s + 'Z').getTime();
+		return parseTs(s)?.getTime() ?? NaN;
 	}
 
 	function statusKey(status: string | null): 'ok' | 'bad' | 'other' {

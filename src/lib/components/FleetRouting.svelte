@@ -9,7 +9,7 @@
 	// Purely presentational: the routing block rides in the parent's /ui/dashboard
 	// fetch and is piped in via the `data` prop (null until the first load).
 	import type { FleetRoutingOverview } from '$lib/types';
-	import { fmtTime } from '$lib/format';
+	import { fmtTime, fmtNum as fmt, fmtCompact as compact } from '$lib/format';
 	import TrendChart from '$lib/components/charts/TrendChart.svelte';
 	import Donut from '$lib/components/charts/Donut.svelte';
 	import ChartLegend from '$lib/components/charts/ChartLegend.svelte';
@@ -17,7 +17,7 @@
 	import Widget from '$lib/components/Widget.svelte';
 	import Toggle from '$lib/components/Toggle.svelte';
 	import Skeleton from '$lib/components/Skeleton.svelte';
-	import { t, locale } from '$lib/i18n.svelte';
+	import { t } from '$lib/i18n.svelte';
 
 	let { data = null, asof = '' }: { data?: FleetRoutingOverview | null; asof?: string } = $props();
 	let loading = $derived(data === null);
@@ -33,12 +33,8 @@
 	const V4_COLOR = 'var(--c-data-1)';
 	const V6_COLOR = 'var(--c-data-2)';
 
-	const pct = (v: number, tot: number) => (tot > 0 ? Math.round((v / tot) * 100) : 0);
-	const fmt = (n: number) => n.toLocaleString();
-	// Radar stat cells show a compact primary ("12万"/"120K", locale-aware) with
-	// full per-family numbers in the small rows beneath.
-	const compact = (n: number) =>
-		new Intl.NumberFormat(locale.tag, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+	// dp: decimal places — invalid share is tiny, so it gets 2 decimals below.
+	const pct = (v: number, tot: number, dp = 0) => (tot > 0 ? +((v / tot) * 100).toFixed(dp) : 0);
 	function median(a: number[]): number {
 		if (!a.length) return 0;
 		const s = [...a].sort((x, y) => x - y);
@@ -215,7 +211,7 @@
 				<li>
 					<span class="sc-lbl">{t('routing.rpki.invalid')}</span>
 					<span class="sc-val">{compact(data.summary.rpki.invalid)}</span>
-					<span class="sc-pct">({rpkiTotal ? +((data.summary.rpki.invalid / rpkiTotal) * 100).toFixed(2) : 0}%)</span>
+					<span class="sc-pct">({pct(data.summary.rpki.invalid, rpkiTotal, 2)}%)</span>
 					<dl class="sc-other">
 						<div class="g"><dt>IPv4:</dt><dd>{fmt(data.summary.rpki_v4.invalid)}</dd></div>
 						<div class="g"><dt>IPv6:</dt><dd>{fmt(data.summary.rpki_v6.invalid)}</dd></div>
@@ -333,9 +329,9 @@
 				{/if}
 				{#if famView !== '4'}
 					<div class="fam-chart">
-						<ChartLegend items={[{ label: t('routing.v6'), color: V4_COLOR, line: true }]} />
+						<ChartLegend items={[{ label: t('routing.v6'), color: V6_COLOR, line: true }]} />
 						<TrendChart
-							series={[{ label: t('routing.v6'), color: V4_COLOR, values: sizeV6, step: true }]}
+							series={[{ label: t('routing.v6'), color: V6_COLOR, values: sizeV6, step: true }]}
 							timestamps={fleetTrend.stamps}
 							height={famView === 'both' ? 200 : 250}
 							zeroBased={!minMax}

@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
-	import { fmtTime } from '$lib/format';
+	import { fmtTime, fmtNum } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import { pollEffect } from '$lib/refresh.svelte';
+	import { debounced } from '$lib/table.svelte';
 	import type {
 		RouteEntry,
 		RoutingOrigins,
@@ -71,7 +72,7 @@
 			prefixes = await api.routingPrefixes(nodeId, {
 				family: family || undefined,
 				scope,
-				q: qDebounced.trim() || undefined,
+				q: qDeb.value.trim() || undefined,
 				limit: LIMIT,
 				offset
 			});
@@ -88,12 +89,7 @@
 
 	// Debounced search: typing re-fetches at most every 300ms instead of per
 	// keystroke; Enter (resetAndSearch) flushes immediately.
-	let qDebounced = $state('');
-	$effect(() => {
-		const v = q;
-		const id = setTimeout(() => (qDebounced = v), 300);
-		return () => clearTimeout(id);
-	});
+	const qDeb = debounced(() => q);
 
 	// Reload the prefixes page whenever a filter/search/page changes (or once
 	// summary first arrives). untrack the loader so its internal reads don't
@@ -101,14 +97,14 @@
 	$effect(() => {
 		family;
 		scope;
-		qDebounced;
+		qDeb.value;
 		offset;
 		const ready = summary !== null;
 		if (ready) untrack(() => loadPrefixes());
 	});
 
 	function resetAndSearch() {
-		qDebounced = q; // flush the debounce
+		qDeb.flush();
 		offset = 0;
 	}
 
@@ -345,7 +341,7 @@
 	<div class="donuts">
 		<!-- Radar "IP version" pattern: legend + big % header over a segmented bar -->
 		<div class="fam-share">
-			<ShareBar segments={familySegments} format={(v) => v.toLocaleString()} />
+			<ShareBar segments={familySegments} />
 		</div>
 		<div class="donut-card">
 			<Donut segments={rpkiSegments} size={140} thickness={20} centerValue={rpkiValidPct} centerLabel={t('routing.rpki.center')} />
@@ -387,7 +383,7 @@
 				series={timelineSeries}
 				timestamps={timelineStamps}
 				height={200}
-				format={(v) => Math.round(v).toLocaleString()}
+				format={(v) => fmtNum(Math.round(v))}
 			/>
 		</div>
 	{/if}
@@ -648,7 +644,7 @@
 				{/each}
 			</tbody>
 		</table>
-		<div class="pager">
+		<div class="pager-split">
 			<span class="faint">{t('routing.showing', prefixes.routes.length, prefixes.total)}</span>
 			<div class="inline">
 				<button class="btn ghost sm" disabled={offset === 0} onclick={() => (offset = Math.max(0, offset - LIMIT))}>{t('routing.prev')}</button>
@@ -934,7 +930,7 @@
 		background: var(--accent-soft);
 		color: var(--accent);
 	}
-	.pager {
+	.pager-split {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;

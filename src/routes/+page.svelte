@@ -8,7 +8,7 @@
 		PeeringIssue
 	} from '$lib/types';
 	import FleetRouting from '$lib/components/FleetRouting.svelte';
-	import { fmtBytes } from '$lib/format';
+	import { fmtBytes, fmtRate } from '$lib/format';
 	import { pollEffect } from '$lib/refresh.svelte';
 	import { urlParam } from '$lib/urlstate.svelte';
 	import { t, locale } from '$lib/i18n.svelte';
@@ -25,7 +25,6 @@
 	// quantity series → data palette (semantic ok/bad stay reserved for status)
 	const RX_COLOR = 'var(--c-data-1)';
 	const TX_COLOR = 'var(--c-data-2)';
-	const fmtRate = (v: number) => fmtBytes(v) + '/s';
 
 	let fleetTrafficPts = $state<TrafficPoint[]>([]);
 	// previous-window overlay (?compare=1), same bucket grid — align by index

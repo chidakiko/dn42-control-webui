@@ -7,7 +7,7 @@
 	import SortTh from '$lib/components/SortTh.svelte';
 	import type { NodeIn, UiNodeRow } from '$lib/types';
 	import { toast } from '$lib/toast.svelte';
-	import { fmtTime } from '$lib/format';
+	import { fmtTime, LIVE_CLS } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import InlineBanner from '$lib/components/InlineBanner.svelte';
@@ -22,7 +22,6 @@
 	let loading = $state(true);
 	let error = $state('');
 
-	const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'down' } as const;
 
 	// Client-side search (?q=, shareable) + column sort — the fleet is far below
 	// the ~500-row threshold where this would need to move server-side.

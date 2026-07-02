@@ -20,7 +20,12 @@ interface Dict {
 	[key: string]: Entry | Dict['rel'];
 }
 
-const en: Dict = {
+// `en` is the canonical dictionary: its keys define the full set every other
+// language must cover exactly — a missing or extra key in zh/zhHant/ja is a
+// compile error instead of a silent English fallback at runtime.
+type FullDict = { [K in keyof typeof en]: K extends 'rel' ? (typeof en)['rel'] : Entry };
+
+const en = {
 	rel: {
 		now: 'just now',
 		s: (n) => `${n}s ago`,
@@ -804,9 +809,9 @@ const en: Dict = {
 
 	// json editor
 	'json.invalid': (m: string) => `Invalid JSON: ${m}`
-};
+} satisfies Dict;
 
-const zh: Dict = {
+const zh: FullDict = {
 	rel: {
 		now: '刚刚',
 		s: (n) => `${n} 秒前`,
@@ -1551,7 +1556,7 @@ const zh: Dict = {
 	'json.invalid': (m: string) => `JSON 非法：${m}`
 };
 
-const zhHant: Dict = {
+const zhHant: FullDict = {
 	rel: {
 		now: '剛剛',
 		s: (n) => `${n} 秒前`,
@@ -2296,7 +2301,7 @@ const zhHant: Dict = {
 	'json.invalid': (m: string) => `JSON 非法：${m}`
 };
 
-const ja: Dict = {
+const ja: FullDict = {
 	rel: {
 		now: 'たった今',
 		s: (n) => `${n}秒前`,
@@ -3129,7 +3134,7 @@ export const locale = new Locale();
 
 /** Translate a key, applying args when the entry is a function. */
 export function t(key: string, ...args: unknown[]): string {
-	const entry = (locale.dict[key] ?? en[key]) as Entry | undefined;
+	const entry = (locale.dict[key] ?? (en as Dict)[key]) as Entry | undefined;
 	if (entry === undefined) return key;
 	return typeof entry === 'function' ? entry(...args) : entry;
 }

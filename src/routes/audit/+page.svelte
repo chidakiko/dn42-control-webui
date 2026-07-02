@@ -12,6 +12,7 @@
 	import JsonView from '$lib/components/JsonView.svelte';
 	import { pollEffect } from '$lib/refresh.svelte';
 	import { urlParam } from '$lib/urlstate.svelte';
+	import { debounced } from '$lib/table.svelte';
 
 	// Server-side cursor paging + search (GET /ui/audit): the log is append-only,
 	// so the browser never holds more than the pages the operator walked.
@@ -25,12 +26,7 @@
 	let limit = $derived(Math.min(Number(limitParam.value) || 100, 500));
 	const qParam = urlParam('q');
 	// debounce typing before it hits the server; q matches actor/method/path
-	let qDebounced = $state('');
-	$effect(() => {
-		const v = qParam.value;
-		const id = setTimeout(() => (qDebounced = v), 300);
-		return () => clearTimeout(id);
-	});
+	const qDeb = debounced(() => qParam.value);
 
 	let showDetail = $state(false);
 	let detail = $state<unknown>(null);
@@ -43,7 +39,7 @@
 		if (items.length === 0) loading = true;
 		error = '';
 		try {
-			const r = await api.uiAudit({ limit, q: qDebounced || undefined });
+			const r = await api.uiAudit({ limit, q: qDeb.value || undefined });
 			if (items.length > limit) {
 				// The operator has paged into history — prepend only what's new so a
 				// background tick doesn't yank the older pages out from under them.
@@ -65,7 +61,7 @@
 		if (!last || loadingMore) return;
 		loadingMore = true;
 		try {
-			const r = await api.uiAudit({ limit, q: qDebounced || undefined, beforeId: last.id });
+			const r = await api.uiAudit({ limit, q: qDeb.value || undefined, beforeId: last.id });
 			items = [...items, ...r.entries];
 			hasMore = r.entries.length === limit;
 		} catch (err) {
@@ -78,12 +74,12 @@
 	let lastKey = '';
 	pollEffect(
 		() => {
-			const key = `${limit}|${qDebounced}`;
+			const key = `${limit}|${qDeb.value}`;
 			const changed = key !== lastKey;
 			lastKey = key;
 			return load(changed);
 		},
-		() => `${limit}|${qDebounced}`
+		() => `${limit}|${qDeb.value}`
 	);
 
 	function codeCls(code: number): string {
@@ -133,7 +129,7 @@
 {:else}
 	{#if error}<InlineBanner detail={error} />{/if}
 	<div class="card" style="padding:0">
-		{#if items.length === 0 && qDebounced}
+		{#if items.length === 0 && qDeb.value}
 			<div class="empty">{t('common.noMatch')}</div>
 		{:else if items.length === 0}
 			<EmptyState icon="audit" title={t('audit.empty')} hint={t('audit.subtitle')} />

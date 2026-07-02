@@ -3,6 +3,8 @@
 	// big bold percentages, over a single segmented bar (2px gaps, 2px radius —
 	// parameters lifted from Radar's StackedBar source). Pure CSS, no Chart.js.
 	// Shares < 0.1% render as "< 0.1%" and keep a sliver-width segment.
+	import { fmtNum } from '$lib/format';
+
 	interface Segment {
 		label: string;
 		value: number;
@@ -12,7 +14,7 @@
 		segments,
 		height = 14,
 		showHeader = true,
-		format = (v: number) => v.toLocaleString()
+		format = fmtNum
 	}: {
 		segments: Segment[];
 		height?: number;

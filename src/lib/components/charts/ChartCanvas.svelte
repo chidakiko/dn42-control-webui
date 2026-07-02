@@ -1,40 +1,53 @@
 <script lang="ts">
-	// Shared Chart.js host: owns the <canvas>, (re)creates the chart whenever the
-	// `config` object changes (parents pass a $derived config so data/format changes
-	// trigger a rebuild) or the theme switches (so axis/tooltip colours re-derive).
-	import { theme } from '$lib/theme.svelte';
+	// Shared Chart.js host: owns the <canvas> and one chart instance per canvas.
+	// Parents pass a $derived config (built via chartTheme(), which tracks the theme),
+	// so data/format/theme changes all arrive as a new config — applied in place via
+	// chart.update() rather than a destroy+recreate.
+	import { untrack } from 'svelte';
 	import { ensureChart, Chart } from './chartjs';
-	import type { ChartConfiguration, Chart as ChartType } from 'chart.js';
+	import type { ChartConfiguration, Chart as ChartType, Plugin } from 'chart.js';
 
 	let {
 		config,
 		height,
 		width,
 		fixed = false,
-		label = 'chart'
+		label = 'chart',
+		plugins = []
 	}: {
-		config: ChartConfiguration;
+		// `any` type param so typed configs (e.g. ChartConfiguration<'doughnut'>)
+		// are accepted without casting through unknown.
+		config: ChartConfiguration<any>;
 		height?: number;
 		width?: number;
 		/** fixed-size canvas (sparkline/minibar) vs responsive-to-container (line/bar/donut) */
 		fixed?: boolean;
 		label?: string;
+		/** chart-local plugins (must be static for the component's lifetime) */
+		plugins?: Plugin[];
 	} = $props();
 
 	let canvas = $state<HTMLCanvasElement | null>(null);
-	let chart: ChartType | null = null;
+	let chart = $state.raw<ChartType | null>(null);
 
+	// Create once per canvas element; destroyed on unmount.
 	$effect(() => {
-		void config;
-		void theme.mode;
 		if (!canvas) return;
 		ensureChart();
-		chart?.destroy();
-		chart = new Chart(canvas, config);
+		chart = new Chart(canvas, { ...untrack(() => config), plugins });
 		return () => {
 			chart?.destroy();
 			chart = null;
 		};
+	});
+
+	// Data / options / theme changes mutate the live chart in place.
+	$effect(() => {
+		const c = config;
+		if (!chart) return;
+		chart.data = c.data;
+		chart.options = c.options ?? {};
+		chart.update('none');
 	});
 </script>
 

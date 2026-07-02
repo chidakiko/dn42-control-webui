@@ -73,8 +73,6 @@ export interface ResolvedGeo {
 	regionName: string | null;
 	/** placement coordinate [lat, lon], or null when nothing is known. */
 	coord: [number, number] | null;
-	/** how `coord` was derived: a known city, a region centre, or nothing. */
-	placement: 'city' | 'region' | 'none';
 }
 
 /** Adapt a server-resolved NodeGeo (+ the node's raw site code) for the map. */
@@ -88,8 +86,7 @@ export function fromNodeGeo(geo: NodeGeo | null | undefined, site?: string | nul
 			countrySingleCity: false,
 			region: null,
 			regionName: null,
-			coord: null,
-			placement: 'none'
+			coord: null
 		};
 	}
 	const alpha2 = geo.country ? geo.country.toUpperCase() : null;
@@ -104,8 +101,7 @@ export function fromNodeGeo(geo: NodeGeo | null | undefined, site?: string | nul
 		countrySingleCity: alpha2 ? SINGLE_CITY.has(alpha2) : false,
 		region: geo.region,
 		regionName: geo.region != null ? (REGION_NAMES[geo.region] ?? null) : null,
-		coord: [geo.lat, geo.lon],
-		placement: geo.city != null ? 'city' : geo.region != null ? 'region' : 'none'
+		coord: [geo.lat, geo.lon]
 	};
 }
 

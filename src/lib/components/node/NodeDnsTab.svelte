@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { api, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
 	import { t } from '$lib/i18n.svelte';
@@ -36,9 +37,7 @@
 			loading = false;
 		}
 	}
-	$effect(() => {
-		load();
-	});
+	onMount(load);
 	// 父级重载节点后 currentGroupId 变化 → 同步下拉选中。
 	$effect(() => {
 		selected = currentGroupId ?? '';

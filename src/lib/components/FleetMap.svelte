@@ -119,20 +119,8 @@
 			c.group.push(n);
 		}
 		return [...m.values()].map((c) => {
-			let sx = 0;
-			let sy = 0;
-			for (const n of c.group) {
-				const [gx, gy] = proj(geoOf.get(n.node_id)!.coord![1], geoOf.get(n.node_id)!.coord![0]);
-				sx += gx;
-				sy += gy;
-			}
-			const x = sx / c.group.length;
-			const y = sy / c.group.length;
-			const worst = c.group.reduce<NodeHealthValue>(
-				(w, n) => (SEV[n.health] > SEV[w] ? n.health : w),
-				'ok'
-			);
-			return { ...c, x, y, worst };
+			const [x, y] = centroidOf(c.group);
+			return { ...c, x, y, worst: worstOf(c.group) };
 		});
 	});
 
@@ -267,7 +255,6 @@
 	// --- interaction: pan / zoom ---
 	let stageEl = $state<HTMLDivElement | null>(null);
 	let dragging = $state(false);
-	let moved = false;
 	let lastX = 0;
 	let lastY = 0;
 	// transient "hold Ctrl to zoom" hint shown when the user scrolls without a modifier
@@ -302,7 +289,6 @@
 	}
 	function onpointerdown(e: PointerEvent) {
 		dragging = true;
-		moved = false;
 		lastX = e.clientX;
 		lastY = e.clientY;
 		stageEl?.setPointerCapture?.(e.pointerId);
@@ -316,7 +302,6 @@
 		if (!dragging) return;
 		const dx = ((e.clientX - lastX) / rect.width) * vw;
 		const dy = ((e.clientY - lastY) / rect.height) * vh;
-		if (Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY) > 2) moved = true;
 		cx -= dx;
 		cy -= dy;
 		clampCenter();

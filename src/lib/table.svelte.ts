@@ -42,3 +42,23 @@ export function matches(q: string, ...fields: (string | number | null | undefine
 	if (!needle) return true;
 	return fields.some((f) => f != null && String(f).toLowerCase().includes(needle));
 }
+
+/** Debounced view of a reactive source, for search inputs that trigger fetches:
+ * `.value` trails the source by `ms`; `flush()` syncs it immediately (Enter key).
+ * Call during component init (uses runes). */
+export function debounced<T>(source: () => T, ms = 300) {
+	let value = $state(source()) as T;
+	$effect(() => {
+		const v = source();
+		const id = setTimeout(() => (value = v), ms);
+		return () => clearTimeout(id);
+	});
+	return {
+		get value() {
+			return value;
+		},
+		flush() {
+			value = source();
+		}
+	};
+}

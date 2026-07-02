@@ -3,7 +3,7 @@
 	// hover highlights and shows its value in the centre. Centre text is an HTML
 	// overlay (Chart.js has no native centre label).
 	import ChartCanvas from './ChartCanvas.svelte';
-	import { chartTheme, resolveColor } from './chartjs';
+	import { chartTheme, resolveColor, tooltipStyle } from './chartjs';
 	import type { ChartConfiguration } from 'chart.js';
 
 	interface Seg {
@@ -73,15 +73,7 @@
 				},
 				plugins: {
 					legend: { display: false },
-					tooltip: {
-						backgroundColor: th.tooltipBg,
-						titleColor: th.tooltipText,
-						bodyColor: th.tooltipText,
-						borderColor: th.tooltipBorder,
-						borderWidth: 1,
-						padding: 6,
-						displayColors: true
-					}
+					tooltip: { ...tooltipStyle(th), displayColors: true }
 				}
 			}
 		};
@@ -90,7 +82,7 @@
 
 <div class="donut" style:width="{size}px" style:height="{boxH}px">
 	<div class="lift" style:margin-top="-{liftY}px">
-		<ChartCanvas config={config as unknown as ChartConfiguration} width={size} height={size} fixed label="donut chart" />
+		<ChartCanvas {config} width={size} height={size} fixed label="donut chart" />
 	</div>
 	{#if !half && (center.value !== '' || center.label !== '')}
 		<div class="center" style:height="{size}px">

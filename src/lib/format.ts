@@ -46,22 +46,21 @@ export function relTime(value: string | null | undefined): string {
 	return t.d(days);
 }
 
-// Humanise a duration given in seconds (e.g. a WG handshake age) using the same
-// relative-time vocabulary as relTime. null/undefined → '—'.
-export function fmtDurationSecs(secs: number | null | undefined): string {
-	if (secs === null || secs === undefined) return '—';
-	const t = locale.dict.rel;
-	if (secs < 60) return t.s(Math.round(secs));
-	const mins = Math.floor(secs / 60);
-	if (mins < 60) return t.m(mins);
-	const hrs = Math.floor(mins / 60);
-	if (hrs < 24) return t.h(hrs);
-	return t.d(Math.floor(hrs / 24));
+// Locale-aware integer/decimal display ("12,345" / "12 345" per locale).
+export function fmtNum(n: number): string {
+	return n.toLocaleString(locale.tag);
 }
 
-// NOTE: agent liveness grading moved server-side (the 75s/300s thresholds are
-// coupled to the control server's heartbeat interval). Every node row now
-// carries a server-computed `liveness` field — see AgentLivenessFields.
+// Compact magnitude for stat cells ("12万" / "120K", locale-aware).
+export function fmtCompact(n: number): string {
+	return new Intl.NumberFormat(locale.tag, {
+		notation: 'compact',
+		maximumFractionDigits: 1
+	}).format(n);
+}
+
+// Badge/dot CSS class per server-computed agent liveness (see AgentLivenessFields).
+export const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'down' } as const;
 
 // Humanise a byte count to B/KB/MB/GB/… (1024-based). null/undefined → '—'.
 export function fmtBytes(n: number | null | undefined): string {
@@ -75,4 +74,9 @@ export function fmtBytes(n: number | null | undefined): string {
 		i++;
 	}
 	return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+// Byte rate ("1.2 MB/s"). null/undefined → '—'.
+export function fmtRate(n: number | null | undefined): string {
+	return n === null || n === undefined ? '—' : `${fmtBytes(n)}/s`;
 }

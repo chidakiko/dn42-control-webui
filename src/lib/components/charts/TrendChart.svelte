@@ -1,13 +1,12 @@
 <script lang="ts">
-	// Radar-style time-series trend, now backed by Chart.js (canvas) instead of a
-	// hand-rolled SVG. Same public API as before — multi-series smoothed lines over a
-	// timestamped x-axis, optional gradient area fill and dashed comparison lines.
-	// Colours bridge to the CSS-variable theme and the chart is rebuilt on theme switch.
-	import { parseTs } from '$lib/format';
+	// Radar-style time-series trend: multi-series smoothed lines over a timestamped
+	// x-axis, optional gradient area fill and dashed comparison lines. Rendering is
+	// delegated to ChartCanvas; the plot-area frame comes from the plotFrame plugin.
+	import { parseTs, fmtNum } from '$lib/format';
 	import { locale } from '$lib/i18n.svelte';
-	import { theme } from '$lib/theme.svelte';
-	import { ensureChart, chartTheme, resolveColor, withAlpha, Chart } from './chartjs';
-	import type { Chart as ChartType } from 'chart.js';
+	import ChartCanvas from './ChartCanvas.svelte';
+	import { chartTheme, resolveColor, withAlpha, tooltipStyle, plotFrame } from './chartjs';
+	import type { ChartConfiguration, Chart as ChartType } from 'chart.js';
 
 	interface Series {
 		label: string;
@@ -27,7 +26,7 @@
 		timestamps,
 		height = 200,
 		zeroBased = false,
-		format = (v: number) => v.toLocaleString(),
+		format = fmtNum,
 		tickFormat,
 		leftAxisWidth
 	}: {
@@ -41,9 +40,6 @@
 		/** force a fixed left-axis width (px) so this chart's plot area aligns with another stacked below it */
 		leftAxisWidth?: number;
 	} = $props();
-
-	let canvas = $state<HTMLCanvasElement | null>(null);
-	let chart: ChartType | null = null;
 
 	const spanMs = () => {
 		const a = parseTs(timestamps[0]);
@@ -70,29 +66,10 @@
 			: '';
 	}
 
-	function build() {
-		if (!canvas) return;
-		ensureChart();
+	let config = $derived.by((): ChartConfiguration<'line'> => {
 		const th = chartTheme();
-		chart?.destroy();
-		// Radar draws a thin solid frame around the whole plot area (its
-		// chart-outer-line token); Chart.js has no built-in for this, so draw it
-		// after every render.
-		const plotFrame = {
-			id: 'plotFrame',
-			afterDraw(c: ChartType) {
-				const a = c.chartArea;
-				if (!a) return;
-				c.ctx.save();
-				c.ctx.strokeStyle = th.axisLine;
-				c.ctx.lineWidth = 1;
-				c.ctx.strokeRect(a.left + 0.5, a.top + 0.5, a.width - 1, a.height - 1);
-				c.ctx.restore();
-			}
-		};
-		chart = new Chart(canvas, {
+		return {
 			type: 'line',
-			plugins: [plotFrame],
 			data: {
 				labels: timestamps.map((_, i) => i),
 				datasets: series.map((s, i) => ({
@@ -129,13 +106,9 @@
 				interaction: { mode: 'index', intersect: false },
 				plugins: {
 					legend: { display: false },
+					plotFrame: { color: th.axisLine },
 					tooltip: {
-						backgroundColor: th.tooltipBg,
-						titleColor: th.tooltipText,
-						bodyColor: th.tooltipText,
-						borderColor: th.tooltipBorder,
-						borderWidth: 1,
-						padding: 8,
+						...tooltipStyle(th, 8),
 						callbacks: {
 							title: (items) => fullLabel(timestamps[items[0].dataIndex]),
 							label: (item) => `${item.dataset.label}: ${format(item.parsed.y ?? 0)}`
@@ -169,34 +142,8 @@
 					}
 				}
 			}
-		});
-	}
-
-	// Rebuild on data / format / theme change; theme.mode read so a light/dark switch
-	// re-derives axis + tooltip colours.
-	$effect(() => {
-		void series;
-		void timestamps;
-		void zeroBased;
-		void theme.mode;
-		build();
-		return () => {
-			chart?.destroy();
-			chart = null;
 		};
 	});
 </script>
 
-<div class="trend" style="height:{height}px">
-	<canvas bind:this={canvas}></canvas>
-</div>
-
-<style>
-	.trend {
-		position: relative;
-		width: 100%;
-	}
-	canvas {
-		display: block;
-	}
-</style>
+<ChartCanvas {config} {height} plugins={[plotFrame]} label="trend" />

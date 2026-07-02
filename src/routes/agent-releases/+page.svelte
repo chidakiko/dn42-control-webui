@@ -3,7 +3,7 @@
 	import { pollEffect } from '$lib/refresh.svelte';
 	import { dirtyGuard } from '$lib/dirty.svelte';
 	import { toast } from '$lib/toast.svelte';
-	import { fmtTime, relTime } from '$lib/format';
+	import { fmtTime, relTime, LIVE_CLS } from '$lib/format';
 	import { t } from '$lib/i18n.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import InlineBanner from '$lib/components/InlineBanner.svelte';
@@ -79,7 +79,6 @@
 		}
 	}
 
-	const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'down' } as const;
 	let versionOpts = $derived((data?.versions ?? []).map((v) => ({ value: v, label: v })));
 </script>
 

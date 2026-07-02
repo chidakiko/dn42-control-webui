@@ -54,11 +54,6 @@ export interface NodeHealthRow {
 	updated_at: string | null;
 }
 
-export interface FleetHealth {
-	summary: Partial<Record<NodeHealthValue, number>>;
-	nodes: NodeHealthRow[];
-}
-
 // Aggregate dashboard payload: health rows (+ capabilities) + the physical WG mesh
 // links, in one call (replaces N per-node internal-topology fetches).
 // Agent liveness + version, folded into the /ui overview rows from the
@@ -121,12 +116,6 @@ export interface FleetOverview {
 	links: FleetLink[];
 }
 
-export interface NodeHealthDetail extends NodeHealthRow {
-	last_snapshot: Record<string, unknown> | null;
-	last_report: Record<string, unknown> | null;
-	last_apply: Record<string, unknown> | null;
-}
-
 export interface StatusEvent {
 	id: number;
 	kind: string;
@@ -161,11 +150,6 @@ export interface AgentSelfMetrics {
 	consecutive_failures: number | null;
 	self_observed_at: string | null;
 	last_reconcile_at: string | null;
-}
-
-export interface NodeStatusEvents {
-	node_id: string;
-	events: StatusEvent[];
 }
 
 // Slim status-event list row (GET /ui/nodes/{id}/status-events): no payload —
@@ -215,33 +199,6 @@ export interface NodeTrendsOut {
 		last_at: string | null;
 		series: { at: string; status: string | null }[];
 	};
-}
-
-// WG tunnel observation, carried in last_snapshot.wireguard_interfaces[].
-// Mirrors dn42_schemas.ObservedWireGuardInterface / ObservedWireGuardPeer.
-export interface ObservedWgPeer {
-	public_key: string;
-	endpoint: string | null;
-	last_handshake_seconds: number | null;
-	transfer_rx_bytes: number;
-	transfer_tx_bytes: number;
-}
-export interface ObservedWgInterface {
-	name: string;
-	listen_port: number | null;
-	peer_count: number;
-	status: string;
-	peers?: ObservedWgPeer[];
-}
-
-// All bird BGP protocols (internal iBGP + external eBGP) with live state, carried
-// in last_snapshot.bgp_protocols. Mirrors dn42_schemas.ObservedBgpProtocol.
-export interface ObservedBgpProtocol {
-	name: string;
-	session: string | null;
-	state: string;
-	since: string | null;
-	info: string | null;
 }
 
 // WebUI-specific observability aggregates (server pre-computes these).
@@ -450,9 +407,7 @@ export interface PeerDefaults {
 }
 
 // POST /admin/nodes/{id}/peerings/provision with bgp_specs[] — everything is
-// created in one transaction (no partial-success states). The legacy
-// single-session `bgp_session` field still exists in the response; new code
-// reads `sessions`.
+// created in one transaction (no partial-success states).
 export interface ProvisionPeeringOut {
 	peering: PeeringOut;
 	interface: InterfaceOut;

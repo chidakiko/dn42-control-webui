@@ -56,8 +56,8 @@
 			const body: Record<string, unknown> = {};
 			if (ttl.trim()) body.ttl_seconds = Number(ttl);
 			if (customAgentId.trim()) body.agent_id = customAgentId.trim();
-			const t = await api.issueAgentToken(nodeId, body);
-			secret = t.token; // one-time full secret
+			const created = await api.issueAgentToken(nodeId, body);
+			secret = created.token; // one-time full secret
 			showIssue = false;
 			ttl = '';
 			customAgentId = '';

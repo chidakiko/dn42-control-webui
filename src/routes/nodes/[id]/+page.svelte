@@ -5,7 +5,7 @@
 	import { api, ApiError, errorMessage } from '$lib/api';
 	import { toast } from '$lib/toast.svelte';
 	import { confirmDialog } from '$lib/confirm.svelte';
-	import { fmtTime, relTime } from '$lib/format';
+	import { fmtTime, relTime, LIVE_CLS } from '$lib/format';
 	import { geoLabel } from '$lib/geo';
 	import { t } from '$lib/i18n.svelte';
 	import { pollEffect } from '$lib/refresh.svelte';
@@ -82,7 +82,6 @@
 					? 'stale'
 					: null
 	);
-	const LIVE_CLS = { online: 'ok', stale: 'stale', offline: 'down' } as const;
 
 	// Two-level navigation: 5 top-level groups, each with sub-tabs. The content
 	// selector (`tab`) stays flat (the 12 content ids); the group is derived from

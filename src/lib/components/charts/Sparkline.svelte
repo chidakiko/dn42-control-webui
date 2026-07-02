@@ -2,7 +2,7 @@
 	// Sparkline / area trend, backed by Chart.js. Same API as the old SVG version:
 	// fixed-size inline line with optional gradient fill, smoothing and hover readout.
 	import ChartCanvas from './ChartCanvas.svelte';
-	import { resolveColor, withAlpha, chartTheme } from './chartjs';
+	import { resolveColor, withAlpha, chartTheme, tooltipStyle } from './chartjs';
 	import type { ChartConfiguration, Chart as ChartType } from 'chart.js';
 
 	let {
@@ -65,12 +65,7 @@
 					legend: { display: false },
 					tooltip: interactive
 						? {
-								backgroundColor: th.tooltipBg,
-								titleColor: th.tooltipText,
-								bodyColor: th.tooltipText,
-								borderColor: th.tooltipBorder,
-								borderWidth: 1,
-								padding: 6,
+								...tooltipStyle(th),
 								displayColors: false,
 								callbacks: {
 									title: () => '',

@@ -13,8 +13,11 @@ import {
 	DoughnutController,
 	ArcElement,
 	Filler,
-	Tooltip
+	Tooltip,
+	type Plugin,
+	type ChartType
 } from 'chart.js';
+import { theme } from '$lib/theme.svelte';
 
 let registered = false;
 
@@ -74,8 +77,10 @@ export function withAlpha(color: string, alpha: number): string {
 /** Theme-derived colours for axes / gridlines / tooltips.
  * Grid/label follow the Radar alpha system — text colour at 10% (grid),
  * 15% (dashed grid), 20% (axis line), 65% (tick labels) — computed here
- * from --text because canvas can't parse the CSS color-mix() tokens. */
+ * from --text because canvas can't parse the CSS color-mix() tokens.
+ * Reads theme.mode so a $derived chart config re-runs on light/dark switch. */
 export function chartTheme() {
+	void theme.mode;
 	const text = cssVar('--text') || '#888';
 	return {
 		grid: withAlpha(text, 0.1),
@@ -87,5 +92,39 @@ export function chartTheme() {
 		tooltipBorder: cssVar('--border') || '#ccc'
 	};
 }
+
+/** Shared tooltip styling (spread into `options.plugins.tooltip`). */
+export function tooltipStyle(th: ReturnType<typeof chartTheme>, padding = 6) {
+	return {
+		backgroundColor: th.tooltipBg,
+		titleColor: th.tooltipText,
+		bodyColor: th.tooltipText,
+		borderColor: th.tooltipBorder,
+		borderWidth: 1,
+		padding
+	};
+}
+
+declare module 'chart.js' {
+	interface PluginOptionsByType<TType extends ChartType> {
+		plotFrame?: { color: string };
+	}
+}
+
+// Radar draws a thin solid frame around the whole plot area (its chart-outer-line
+// token); Chart.js has no built-in for this, so draw it after every render.
+// Colour comes from `options.plugins.plotFrame.color` so it re-themes with the config.
+export const plotFrame: Plugin = {
+	id: 'plotFrame',
+	afterDraw(c, _args, opts) {
+		const a = c.chartArea;
+		if (!a) return;
+		c.ctx.save();
+		c.ctx.strokeStyle = (opts as { color?: string }).color ?? '#888';
+		c.ctx.lineWidth = 1;
+		c.ctx.strokeRect(a.left + 0.5, a.top + 0.5, a.width - 1, a.height - 1);
+		c.ctx.restore();
+	}
+};
 
 export { Chart };

@@ -6,7 +6,7 @@
 	import { api } from '$lib/api';
 	import { pollEffect } from '$lib/refresh.svelte';
 	import { t } from '$lib/i18n.svelte';
-	import { fmtBytes } from '$lib/format';
+	import { fmtBytes, fmtRate } from '$lib/format';
 	import TrendChart from '../charts/TrendChart.svelte';
 	import ChartLegend from '../charts/ChartLegend.svelte';
 	import type { TrafficPoint } from '$lib/types';
@@ -39,7 +39,6 @@
 	let txRate = $derived(points.map((p) => p.tx_bytes_per_sec));
 	let hasData = $derived(points.length > 1);
 	let hasPrev = $derived(prev.some((p) => p.rx_bytes_per_sec != null));
-	const fmtRate = (v: number) => fmtBytes(v) + '/s';
 </script>
 
 {#if loaded && hasData}
